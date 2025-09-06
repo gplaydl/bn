@@ -1,33 +1,22 @@
-// bot.js
 'use strict';
 
 const express = require('express');
 const crypto = require('crypto');
 const axios = require('axios').default;
-const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Postgres pool with SSL for Render
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-});
+// Lấy API key/secret từ Environment Variables
+const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
+const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 
-// Fetch API key/secret from DB (label = 'default', change if needed)
-async function getBinanceKeys(label = 'default') {
-  const q = 'SELECT api_key, api_secret FROM binance_api_keys WHERE label = $1 LIMIT 1';
-  const { rows } = await pool.query(q, [label]);
-  if (!rows.length) {
-    const e = new Error('No Binance API keys found in DB for label: ' + label);
-    e.status = 500;
-    throw e;
-  }
-  return { apiKey: rows[0].api_key, apiSecret: rows[0].api_secret };
+if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
+  console.error('❌ Missing BINANCE_API_KEY or BINANCE_API_SECRET in environment variables');
+  process.exit(1);
 }
 
-// Normalize input: accept ?symbol=BTCUSDT or ?coin=BTC
+// Chuẩn hóa symbol
 function normalizeSymbol(query) {
   let { symbol, coin } = query;
   if (symbol && typeof symbol === 'string') {
@@ -35,32 +24,30 @@ function normalizeSymbol(query) {
   }
   if (coin && typeof coin === 'string') {
     const c = coin.trim().toUpperCase();
-    // Default quote is USDT
     return c.endsWith('USDT') ? c : `${c}USDT`;
   }
-  // Default symbol if nothing provided
   return 'PAXGUSDT';
 }
 
-// Call Binance public
+// Gọi API public Binance
 async function binancePublic(path, params = {}) {
   const base = 'https://api.binance.com';
   const res = await axios.get(`${base}${path}`, { params, timeout: 10_000 });
   return res.data;
 }
 
-// Call Binance signed (account endpoints)
-async function binanceSigned(path, method, apiKey, apiSecret, params = {}) {
+// Gọi API signed Binance
+async function binanceSigned(path, method, params = {}) {
   const base = 'https://api.binance.com';
   const timestamp = Date.now();
   const recvWindow = 10_000;
 
   const allParams = { ...params, timestamp, recvWindow };
   const query = new URLSearchParams(allParams).toString();
-  const signature = crypto.createHmac('sha256', apiSecret).update(query).digest('hex');
+  const signature = crypto.createHmac('sha256', BINANCE_API_SECRET).update(query).digest('hex');
 
   const url = `${base}${path}?${query}&signature=${signature}`;
-  const headers = { 'X-MBX-APIKEY': apiKey };
+  const headers = { 'X-MBX-APIKEY': BINANCE_API_KEY };
 
   const res = await axios.request({
     url,
@@ -72,10 +59,9 @@ async function binanceSigned(path, method, apiKey, apiSecret, params = {}) {
   return res.data;
 }
 
-// Extract filters and minNotional
+// Lấy filters và minNotional
 function extractFilters(symbolInfo) {
   const filters = symbolInfo?.filters || [];
-  // Binance historically used MIN_NOTIONAL with field minNotional; some variants use notional
   const minNotionalFilter = filters.find(f => f.filterType === 'MIN_NOTIONAL') || null;
   let minNotional = null;
   if (minNotionalFilter) {
@@ -84,14 +70,13 @@ function extractFilters(symbolInfo) {
   return { filters, minNotional };
 }
 
-// Format balances (free/locked/total as numbers)
+// Lấy số dư asset
 function getAssetBalance(balances, asset) {
   const b = balances.find(x => x.asset === asset);
   if (!b) return { free: 0, locked: 0, total: 0 };
   const free = parseFloat(b.free || '0');
   const locked = parseFloat(b.locked || '0');
-  const total = free + locked;
-  return { free, locked, total };
+  return { free, locked, total: free + locked };
 }
 
 app.get('/health', (_req, res) => {
@@ -101,14 +86,13 @@ app.get('/health', (_req, res) => {
 app.get('/check', async (req, res) => {
   try {
     const symbol = normalizeSymbol(req.query);
-    const baseAsset = symbol.replace(/USDT$/i, ''); // works for default USDT quote
-    const { apiKey, apiSecret } = await getBinanceKeys('default');
+    const baseAsset = symbol.replace(/USDT$/i, '');
 
-    // 1) Price
+    // 1) Giá hiện tại
     const priceData = await binancePublic('/api/v3/ticker/price', { symbol });
     const price = parseFloat(priceData.price);
 
-    // 2) Exchange info (filters, minNotional)
+    // 2) Thông tin sàn (filters, minNotional)
     const exInfo = await binancePublic('/api/v3/exchangeInfo', { symbol });
     const symbolInfo = exInfo.symbols?.[0] || null;
     if (!symbolInfo) {
@@ -116,8 +100,8 @@ app.get('/check', async (req, res) => {
     }
     const { filters, minNotional } = extractFilters(symbolInfo);
 
-    // 3) Account balances
-    const account = await binanceSigned('/api/v3/account', 'GET', apiKey, apiSecret);
+    // 3) Số dư tài khoản
+    const account = await binanceSigned('/api/v3/account', 'GET');
     const usdt = getAssetBalance(account.balances || [], 'USDT');
     const coin = getAssetBalance(account.balances || [], baseAsset);
 
@@ -126,8 +110,8 @@ app.get('/check', async (req, res) => {
       price,
       baseAsset: symbolInfo.baseAsset,
       quoteAsset: symbolInfo.quoteAsset,
-      filters,           // full filters from Binance
-      minNotional,       // highlighted
+      filters,
+      minNotional,
       balances: {
         USDT: usdt,
         [symbolInfo.baseAsset]: coin,
@@ -135,12 +119,12 @@ app.get('/check', async (req, res) => {
       ts: new Date().toISOString(),
     });
   } catch (err) {
-    const status = err.status || err.response?.status || 500;
+    const status = err.response?.status || 500;
     const message = err.response?.data || err.message || 'Unknown error';
     res.status(status).json({ error: message });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`Service listening on port ${PORT}`);
+  console.log(`🚀 Service listening on port ${PORT}`);
 });
