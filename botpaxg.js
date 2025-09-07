@@ -62,9 +62,7 @@ async function loadFilters() {
   const priceFilter = symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER');
 
   // Tìm filter min notional hoặc notional
-  const minNotionalFilter = symbolInfo.filters.find(
-    f => f.filterType === 'MIN_NOTIONAL' || f.filterType === 'NOTIONAL'
-  );
+  const minNotionalFilter = symbolInfo.filters.find(f => f.filterType === 'NOTIONAL');
 
   filters = {
     stepSize: parseFloat(lotSize?.stepSize || '0.00000001'),
@@ -181,3 +179,4 @@ app.get('/', (req, res) => {
 app.listen(process.env.PORT || 3000, () => {
   console.log(`Server listening on port ${process.env.PORT || 3000}`);
 });
+
