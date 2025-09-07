@@ -56,16 +56,27 @@ function roundTickSize(price, tickSize) {
 async function loadFilters() {
   const info = await binanceRequest('GET', '/api/v3/exchangeInfo');
   const symbolInfo = info.symbols.find(s => s.symbol === SYMBOL);
+  if (!symbolInfo) throw new Error(`Không tìm thấy symbol ${SYMBOL}`);
+
   const lotSize = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
   const priceFilter = symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER');
-  const minNotional = symbolInfo.filters.find(f => f.filterType === 'MIN_NOTIONAL');
+
+  // Tìm filter min notional hoặc notional
+  const minNotionalFilter = symbolInfo.filters.find(
+    f => f.filterType === 'MIN_NOTIONAL' || f.filterType === 'NOTIONAL'
+  );
 
   filters = {
-    stepSize: parseFloat(lotSize.stepSize),
-    tickSize: parseFloat(priceFilter.tickSize),
-    minNotional: parseFloat(minNotional.minNotional)
+    stepSize: parseFloat(lotSize?.stepSize || '0.00000001'),
+    tickSize: parseFloat(priceFilter?.tickSize || '0.01'),
+    minNotional: minNotionalFilter
+      ? parseFloat(minNotionalFilter.minNotional || minNotionalFilter.notional || '0')
+      : 0
   };
+
+  console.log('Filters:', filters);
 }
+
 
 async function getBalances() {
   const acc = await binanceRequest('GET', '/api/v3/account', {}, true);
