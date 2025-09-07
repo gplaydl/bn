@@ -128,3 +128,12 @@ app.get('/check', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Service listening on port ${PORT}`);
 });
+
+const url = 'https://bn-5l7b.onrender.com/health'; // endpoint
+setInterval(() => {
+  axios.get(url)
+    .then(res => console.log(`Ping at ${new Date().toISOString()} - ${res.status}`))
+    .catch(err => console.error(`Ping error: ${err.message}`));
+}, 14 * 60 * 1000); // 14 min
+
+
