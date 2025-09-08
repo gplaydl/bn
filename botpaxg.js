@@ -129,7 +129,7 @@ async function checkFilledOrders() {
     if (order.status === 'FILLED') {
       lastBuyPrice = parseFloat(order.price);
       currentBuyOrder = null;
-      await placeSellOrder(roundTickSize(lastBuyPrice + 100, filters.tickSize), parseFloat(order.executedQty));
+      await placeSellOrder(roundTickSize(lastBuyPrice + 20, filters.tickSize), parseFloat(order.executedQty));
     }
   }
   if (currentSellOrder) {
@@ -152,7 +152,7 @@ async function botLoop() {
     if (!currentBuyOrder && !currentSellOrder) {
       const ticker = await binanceRequest('GET', '/api/v3/ticker/price', { symbol: SYMBOL });
       const currentPrice = parseFloat(ticker.price);
-      const buyPrice = roundTickSize(currentPrice - 50, filters.tickSize);
+      const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
       await placeBuyOrder(buyPrice);
     }
 
@@ -190,4 +190,5 @@ setInterval(() => {
     .then(res => console.log(`Ping at ${new Date().toISOString()} - ${res.status}`))
     .catch(err => console.error(`Ping error: ${err.message}`));
 }, 14 * 60 * 1000); // 14 min
+
 
