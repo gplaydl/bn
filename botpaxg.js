@@ -172,6 +172,10 @@ async function botLoop() {
   setInterval(botLoop, INTERVAL);
 })();
 
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 app.get('/', (req, res) => {
   res.send('Bot PAXG đang chạy...');
 });
@@ -179,4 +183,11 @@ app.get('/', (req, res) => {
 app.listen(process.env.PORT || 3000, () => {
   console.log(`Server listening on port ${process.env.PORT || 3000}`);
 });
+
+const url = 'https://bn-5l7b.onrender.com/health'; // endpoint
+setInterval(() => {
+  axios.get(url)
+    .then(res => console.log(`Ping at ${new Date().toISOString()} - ${res.status}`))
+    .catch(err => console.error(`Ping error: ${err.message}`));
+}, 14 * 60 * 1000); // 14 min
 
