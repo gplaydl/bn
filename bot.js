@@ -62,7 +62,7 @@ async function binanceSigned(path, method, params = {}) {
 // Lấy filters và minNotional
 function extractFilters(symbolInfo) {
   const filters = symbolInfo?.filters || [];
-  const minNotionalFilter = filters.find(f => f.filterType === 'MIN_NOTIONAL') || null;
+  const minNotionalFilter = filters.find(f => f.filterType === 'NOTIONAL') || null;
   let minNotional = null;
   if (minNotionalFilter) {
     minNotional = minNotionalFilter.minNotional ?? minNotionalFilter.notional ?? null;
@@ -135,5 +135,6 @@ setInterval(() => {
     .then(res => console.log(`Ping at ${new Date().toISOString()} - ${res.status}`))
     .catch(err => console.error(`Ping error: ${err.message}`));
 }, 14 * 60 * 1000); // 14 min
+
 
 
