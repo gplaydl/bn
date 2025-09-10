@@ -277,7 +277,7 @@ async function checkFilledOrders() {
         const { usdtFree } = await getBalances();
         if (usdtFree >= BUY_AMOUNT_USD) {
           const t        = await binanceRequest('GET', '/api/v3/ticker/price', { symbol: SYMBOL });
-          const buyPrice = roundTickSize(parseFloat(t.price) - 10, filters.tickSize);
+          const buyPrice = roundTickSize(parseFloat(t.price) -8, filters.tickSize);
           console.log(`🔄 Tái đầu tư: mua @ ${buyPrice}`);
           await sendTelegramMessage(`🔄 Tái đầu tư: đặt lệnh *MUA* @ ${buyPrice}`);
           await placeBuyOrder(buyPrice);
@@ -309,7 +309,7 @@ async function botLoop() {
     if (paxgFree > 0 && paxgFree < filters.minQty && !currentBuyOrder) {
       console.log(`ℹ️ Dust PAXG (${paxgFree}) → mua lại nếu USDT đủ.`);
       if (usdtFree >= BUY_AMOUNT_USD) {
-        const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
+        const buyPrice = roundTickSize(currentPrice -8, filters.tickSize);
         console.log(`🔄 Đặt MUA dust @ ${buyPrice}`);
         await placeBuyOrder(buyPrice);
       }
@@ -323,7 +323,7 @@ async function botLoop() {
         if (!avg) return;
         lastBuyPrice = avg;
       }
-      const sellPrice = roundTickSize(lastBuyPrice + 20, filters.tickSize);
+      const sellPrice = roundTickSize(lastBuyPrice + 16, filters.tickSize);
       await placeSellOrder(sellPrice, paxgFree);
       return;
     }
@@ -331,7 +331,7 @@ async function botLoop() {
     // Không có PAXG → đặt BUY nếu USDT đủ
     if (paxgFree === 0 && !currentBuyOrder) {
       if (usdtFree >= BUY_AMOUNT_USD) {
-        const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
+        const buyPrice = roundTickSize(currentPrice -8, filters.tickSize);
         await placeBuyOrder(buyPrice);
       }
     }
