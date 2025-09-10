@@ -152,28 +152,45 @@ async function placeSellOrder(price, qty) {
 }
 
 async function checkFilledOrders() {
+  // Kiểm tra lệnh mua
   if (currentBuyOrder) {
     const order = await binanceRequest('GET', '/api/v3/order', {
       symbol: SYMBOL,
       orderId: currentBuyOrder.orderId
     }, true);
+
     if (order.status === 'FILLED') {
       lastBuyPrice = parseFloat(order.price);
       currentBuyOrder = null;
-      await placeSellOrder(roundTickSize(lastBuyPrice + 20, filters.tickSize), parseFloat(order.executedQty));
+
+      // Giá bán = giá mua + 20
+      const sellPrice = roundTickSize(lastBuyPrice + 20, filters.tickSize);
+
+      // Số lượng đã mua
+      const qtyBought = parseFloat(order.executedQty);
+
+      console.log(`✅ Đã mua ${qtyBought} ${BASE} tại giá ${lastBuyPrice}`);
+      console.log(`📌 Tạo lệnh bán tại giá ${sellPrice}`);
+
+      await placeSellOrder(sellPrice, qtyBought);
     }
   }
+
+  // Kiểm tra lệnh bán
   if (currentSellOrder) {
     const order = await binanceRequest('GET', '/api/v3/order', {
       symbol: SYMBOL,
       orderId: currentSellOrder.orderId
     }, true);
+
     if (order.status === 'FILLED') {
+      console.log(`💰 Đã bán ${order.executedQty} ${BASE} tại giá ${order.price}`);
       currentSellOrder = null;
       lastBuyPrice = null;
     }
   }
 }
+
 
 async function botLoop() {
   try {
@@ -188,9 +205,10 @@ async function botLoop() {
     console.log(`📌 Lệnh chờ mua: ${currentBuyOrder ? JSON.stringify(currentBuyOrder) : 'Không có'}`);
     console.log(`📌 Lệnh chờ bán: ${currentSellOrder ? JSON.stringify(currentSellOrder) : 'Không có'}`);
 
-    // Nếu không có lệnh chờ
+    // Chỉ đặt lệnh mua khi:
+    // 1. Không có lệnh mua/bán đang chờ
+    // 2. Số dư USDT >= minNotional
     if (!currentBuyOrder && !currentSellOrder) {
-      // Chỉ mua khi đủ USDT tối thiểu
       if (balances.usdtFree >= filters.minNotional) {
         const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
         await placeBuyOrder(buyPrice);
@@ -203,6 +221,7 @@ async function botLoop() {
     console.error('🚨 Lỗi:', err.response?.data || err.message);
   }
 }
+
 
 (async () => {
   await loadFilters();
@@ -228,6 +247,7 @@ setInterval(() => {
     .then(res => console.log(`Ping at ${new Date().toISOString()} - ${res.status}`))
     .catch(err => console.error(`Ping error: ${err.message}`));
 }, 14 * 60 * 1000); // 14 min
+
 
 
 
