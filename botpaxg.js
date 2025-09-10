@@ -12,77 +12,71 @@ app.use(express.json());
 const SYMBOL = 'PAXGUSDT';
 const QUOTE = 'USDT';
 const BASE = 'PAXG';
-const BUY_AMOUNT_USD = 80;              // số USDT dùng cho mỗi lệnh mua
-const INTERVAL = 30_000;                // 30s mỗi vòng lặp
-const ENABLE_REINVEST = true;           // bật/tắt tái đầu tư sau khi bán
+const BUY_AMOUNT_USD = 80;              // USDT cho mỗi lệnh mua
+const INTERVAL = 30_000;                // 30s/lần
+const ENABLE_REINVEST = true;           // tái đầu tư sau khi bán
 const KEEPALIVE_URL = 'https://bn-5l7b.onrender.com/health';
 
 // ====== API key ======
 const API_KEY = process.env.BINANCE_API_KEY;
 const API_SECRET = process.env.BINANCE_API_SECRET;
-
 if (!API_KEY || !API_SECRET) {
   console.error('❌ Thiếu BINANCE_API_KEY hoặc BINANCE_API_SECRET trong biến môi trường');
   process.exit(1);
 }
 
 // ====== Trạng thái ======
-let filters = { stepSize: 0.00000001, tickSize: 0.01, minNotional: 0 };
+let filters = { stepSize: 0.00000001, tickSize: 0.01, minNotional: 0, minQty: 0 };
 let currentBuyOrder = null;
 let currentSellOrder = null;
 let lastBuyPrice = null;
 
-// ====== Tiện ích Binance ======
+// ====== Gọi API Binance ======
 async function binanceRequest(method, path, params = {}, isPrivate = false) {
   const baseURL = 'https://api.binance.com';
-  const timestamp = Date.now();
   const query = new URLSearchParams(params);
-
   if (isPrivate) {
-    query.append('timestamp', timestamp);
+    query.append('timestamp', Date.now());
     query.append('recvWindow', '5000');
     const signature = crypto.createHmac('sha256', API_SECRET)
       .update(query.toString())
       .digest('hex');
     query.append('signature', signature);
   }
-
   const headers = isPrivate ? { 'X-MBX-APIKEY': API_KEY } : {};
   const url = `${baseURL}${path}?${query.toString()}`;
   const res = await axios({ method, url, headers });
   return res.data;
 }
 
+// ====== Round theo stepSize/tickSize ======
 function roundStepSize(qty, stepSize) {
   const q = Math.floor(qty / stepSize) * stepSize;
   return Number(q.toFixed(8));
 }
-
 function roundTickSize(price, tickSize) {
   const p = Math.floor(price / tickSize) * tickSize;
   return Number(p.toFixed(2));
 }
 
-// ====== Filters giao dịch ======
+// ====== Load filters ======
 async function loadFilters() {
   const info = await binanceRequest('GET', '/api/v3/exchangeInfo');
-  const symbolInfo = info.symbols.find(s => s.symbol === SYMBOL);
-  if (!symbolInfo) throw new Error(`Không tìm thấy symbol ${SYMBOL}`);
+  const s = info.symbols.find(x => x.symbol === SYMBOL);
+  if (!s) throw new Error(`Không tìm thấy symbol ${SYMBOL}`);
 
-  const lotSize = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
-  const priceFilter = symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER');
-  const minNotionalFilter =
-    symbolInfo.filters.find(f => f.filterType === 'NOTIONAL') ||
-    symbolInfo.filters.find(f => f.filterType === 'MIN_NOTIONAL');
+  const lot = s.filters.find(f => f.filterType === 'LOT_SIZE');
+  const priceF = s.filters.find(f => f.filterType === 'PRICE_FILTER');
+  const notional =
+    s.filters.find(f => f.filterType === 'NOTIONAL') ||
+    s.filters.find(f => f.filterType === 'MIN_NOTIONAL');
 
   filters = {
-    stepSize: parseFloat(lotSize?.stepSize || '0.00000001'),
-    tickSize: parseFloat(priceFilter?.tickSize || '0.01'),
-    minNotional: minNotionalFilter
-      ? parseFloat(minNotionalFilter.minNotional || minNotionalFilter.notional || '0')
-      : 0
+    stepSize: parseFloat(lot?.stepSize || '0.00000001'),
+    tickSize: parseFloat(priceF?.tickSize || '0.01'),
+    minNotional: notional ? parseFloat(notional.minNotional || notional.notional || '0') : 0,
+    minQty: parseFloat(lot?.minQty || '0')
   };
-
   console.log('Filters:', filters);
 }
 
@@ -98,112 +92,75 @@ async function getBalances() {
 }
 
 // ====== Lấy giá trung bình đã mua ======
-// 1) Cố gắng lấy từ capital/config/getall (nếu tài khoản hỗ trợ)
+// 1) Ưu tiên từ capital/config/getall (nếu tài khoản hỗ trợ)
 async function getAverageBuyPriceFromCapital(asset) {
   try {
     const data = await binanceRequest('GET', '/sapi/v1/capital/config/getall', {}, true);
     const assetInfo = Array.isArray(data) ? data.find(a => a.coin === asset || a.asset === asset) : null;
-    const avg =
-      assetInfo?.avgPrice ??
-      assetInfo?.price ??
-      assetInfo?.costPrice ??
-      null;
-
+    const avg = assetInfo?.avgPrice ?? assetInfo?.price ?? assetInfo?.costPrice ?? null;
     if (!avg) {
       console.log(`⚠️ Không tìm thấy giá trung bình cho ${asset} từ capital/config/getall`);
       return null;
     }
     const avgNum = parseFloat(avg);
-    if (Number.isFinite(avgNum) && avgNum > 0) return avgNum;
-
-    console.log(`⚠️ Trường giá trung bình không hợp lệ cho ${asset}: ${avg}`);
-    return null;
+    return Number.isFinite(avgNum) && avgNum > 0 ? avgNum : null;
   } catch (e) {
     console.log('⚠️ Lỗi lấy giá trung bình từ capital API:', e.response?.data || e.message);
     return null;
   }
 }
 
-// 2) Fallback: tính giá vốn trung bình từ lịch sử giao dịch myTrades (FIFO)
+// 2) Fallback: tính từ lịch sử giao dịch myTrades theo FIFO (giá vốn tồn kho còn lại)
 async function fetchAllTrades(symbol, maxPages = 50) {
   const all = [];
-  let fromId = undefined;
-
+  let fromId;
   for (let i = 0; i < maxPages; i++) {
     const params = { symbol, limit: 1000 };
     if (fromId !== undefined) params.fromId = fromId;
-
     const batch = await binanceRequest('GET', '/api/v3/myTrades', params, true);
     if (!Array.isArray(batch) || batch.length === 0) break;
-
     all.push(...batch);
-
     const last = batch[batch.length - 1];
-    const nextId = (typeof last.id === 'number') ? last.id + 1 : undefined;
+    const nextId = typeof last.id === 'number' ? last.id + 1 : undefined;
     if (!nextId || batch.length < 1000) break;
     fromId = nextId;
   }
-
-  // đảm bảo theo thời gian tăng dần
   all.sort((a, b) => a.time - b.time || a.id - b.id);
   return all;
 }
 
 function computeRemainingPositionAvgPriceFIFO(trades) {
-  // trades: myTrades cho SYMBOL; mỗi trade có: isBuyer, qty, price, commission, commissionAsset
-  // Ta tính tồn kho còn lại theo FIFO và giá vốn trung bình của tồn kho
-  const lots = []; // mỗi lot: { qty, costPerUnit }
-  const asNumber = v => parseFloat(v);
+  const lots = [];
+  const f = v => parseFloat(v);
 
   for (const t of trades) {
-    const qty = asNumber(t.qty);
-    const price = asNumber(t.price);
-    const commission = asNumber(t.commission || 0);
+    const qty = f(t.qty);
+    const price = f(t.price);
+    const commission = f(t.commission || 0);
     const commissionAsset = t.commissionAsset;
 
     if (t.isBuyer) {
-      // Điều chỉnh số lượng và chi phí theo phí:
-      // - Nếu phí bằng BASE => số lượng thực nhận giảm
-      // - Nếu phí bằng QUOTE => chi phí tăng thêm (trên tổng cost)
       let qtyNet = qty;
-      let totalCostQuote = qty * price;
-
-      if (commissionAsset === BASE) {
-        qtyNet = Math.max(0, qtyNet - commission);
-      } else if (commissionAsset === QUOTE) {
-        totalCostQuote += commission;
-      }
-      if (qtyNet > 0) {
-        const unitCost = totalCostQuote / qtyNet;
-        lots.push({ qty: qtyNet, unitCost });
-      }
+      let totalCost = qty * price;
+      if (commissionAsset === BASE) qtyNet = Math.max(0, qtyNet - commission);
+      else if (commissionAsset === QUOTE) totalCost += commission;
+      if (qtyNet > 0) lots.push({ qty: qtyNet, unitCost: totalCost / qtyNet });
     } else {
-      // SELL: trừ dần từ các lot FIFO
-      let remainingSell = qty;
-      // Nếu phí bằng BASE, số lượng thực bán giảm; nếu bằng QUOTE thì không ảnh hưởng qty
-      if (commissionAsset === BASE) {
-        remainingSell = Math.max(0, remainingSell - commission);
-      }
-      while (remainingSell > 0 && lots.length > 0) {
+      let remaining = qty;
+      if (commissionAsset === BASE) remaining = Math.max(0, remaining - commission);
+      while (remaining > 0 && lots.length > 0) {
         const lot = lots[0];
-        const take = Math.min(lot.qty, remainingSell);
+        const take = Math.min(lot.qty, remaining);
         lot.qty -= take;
-        remainingSell -= take;
-        if (lot.qty <= 0.00000001) {
-          lots.shift();
-        }
+        remaining -= take;
+        if (lot.qty <= 1e-8) lots.shift();
       }
-      // Nếu remainingSell > 0 và hết lot => coi như bán vượt, bỏ qua phần dư (không nên xảy ra nếu dữ liệu đủ)
     }
   }
 
-  const remainingQty = lots.reduce((s, l) => s + l.qty, 0);
-  const remainingCost = lots.reduce((s, l) => s + l.qty * l.unitCost, 0);
-
-  if (remainingQty > 0 && remainingCost > 0) {
-    return remainingCost / remainingQty;
-  }
-  return null;
+  const remQty = lots.reduce((s, l) => s + l.qty, 0);
+  const remCost = lots.reduce((s, l) => s + l.qty * l.unitCost, 0);
+  return remQty > 0 && remCost > 0 ? remCost / remQty : null;
 }
 
 async function getAverageBuyPriceFromTrades(symbol) {
@@ -214,23 +171,18 @@ async function getAverageBuyPriceFromTrades(symbol) {
       return null;
     }
     const avg = computeRemainingPositionAvgPriceFIFO(trades);
-    if (avg && Number.isFinite(avg) && avg > 0) return avg;
-    console.log('⚠️ Không tính được giá trung bình từ myTrades (có thể không còn tồn kho).');
-    return null;
+    return avg && Number.isFinite(avg) && avg > 0 ? avg : null;
   } catch (e) {
-    console.log('⚠️ Lỗi lấy/tính myTrades:', e.response?.data || e.message);
+    console.log('⚠️ Lỗi myTrades:', e.response?.data || e.message);
     return null;
   }
 }
 
-// Tổ hợp: lấy avg từ capital, nếu không có thì fallback sang myTrades
 async function getAverageBuyPrice(asset, symbol) {
-  const capitalAvg = await getAverageBuyPriceFromCapital(asset);
-  if (capitalAvg) return capitalAvg;
-
-  const tradesAvg = await getAverageBuyPriceFromTrades(symbol);
-  if (tradesAvg) return tradesAvg;
-
+  const avgCapital = await getAverageBuyPriceFromCapital(asset);
+  if (avgCapital) return avgCapital;
+  const avgTrades = await getAverageBuyPriceFromTrades(symbol);
+  if (avgTrades) return avgTrades;
   return null;
 }
 
@@ -243,95 +195,78 @@ async function checkOpenOrders() {
 
 async function placeBuyOrder(price) {
   const { usdtFree } = await getBalances();
-  const maxBuyUSD = Math.min(BUY_AMOUNT_USD, usdtFree);
-  if (maxBuyUSD <= 0) {
-    console.log(`❌ Không đủ USDT để mua. Số dư: ${usdtFree}`);
+  const amountUSD = Math.min(BUY_AMOUNT_USD, usdtFree);
+  if (amountUSD < filters.minNotional) {
+    console.log(`❌ Không đủ USDT để mua (cần >= ${filters.minNotional})`);
     return;
   }
-
-  let qty = maxBuyUSD / price;
-  qty = roundStepSize(qty, filters.stepSize);
-
-  if (qty * price < filters.minNotional) {
-    console.log(`❌ Lệnh mua không đạt minNotional (${filters.minNotional} ${QUOTE})`);
+  let qty = roundStepSize(amountUSD / price, filters.stepSize);
+  if (qty < filters.minQty) {
+    console.log(`❌ Lượng mua (${qty}) < minQty (${filters.minQty})`);
     return;
   }
-
   console.log(`✅ Đặt MUA ${qty} ${SYMBOL} tại ${price}`);
-  const order = await binanceRequest('POST', '/api/v3/order', {
-    symbol: SYMBOL,
-    side: 'BUY',
-    type: 'LIMIT',
-    timeInForce: 'GTC',
-    quantity: qty,
-    price
+  const o = await binanceRequest('POST', '/api/v3/order', {
+    symbol: SYMBOL, side: 'BUY', type: 'LIMIT',
+    timeInForce: 'GTC', quantity: qty, price
   }, true);
-
-  currentBuyOrder = order;
+  currentBuyOrder = o;
 }
 
-async function placeSellOrder(price, qty) {
+async function placeSellOrder(price, qtyWanted) {
   const { paxgFree } = await getBalances();
-  let sellQty = Math.min(qty, paxgFree);
-  sellQty = roundStepSize(sellQty, filters.stepSize);
-
-  if (sellQty <= 0) {
-    console.log(`❌ Không đủ ${BASE} để bán. Số dư: ${paxgFree}`);
+  if (paxgFree < filters.minQty) {
+    console.log(`ℹ️ Số dư PAXG (${paxgFree}) < minQty (${filters.minQty}) → coi là dư sau bán trước đó.`);
     return;
-  }
-  if (sellQty * price < filters.minNotional) {
-    console.log(`❌ Lệnh bán không đạt minNotional (${filters.minNotional} ${QUOTE})`);
-    return;
+    // Lưu ý: botLoop sẽ xử lý tái mua khi gặp tình huống này.
   }
 
-  console.log(`✅ Đặt BÁN ${sellQty} ${SYMBOL} tại ${price}`);
-  const order = await binanceRequest('POST', '/api/v3/order', {
-    symbol: SYMBOL,
-    side: 'SELL',
-    type: 'LIMIT',
-    timeInForce: 'GTC',
-    quantity: sellQty,
-    price
+  let qty = roundStepSize(Math.min(qtyWanted, paxgFree), filters.stepSize);
+  if (qty < filters.minQty) {
+    console.log(`❌ Lượng bán (${qty}) < minQty (${filters.minQty})`);
+    return;
+  }
+  if (qty * price < filters.minNotional) {
+    console.log(`❌ Tổng giá trị bán (${(qty * price).toFixed(2)}) < minNotional (${filters.minNotional})`);
+    return;
+  }
+  console.log(`✅ Đặt BÁN ${qty} ${SYMBOL} tại ${price}`);
+  const o = await binanceRequest('POST', '/api/v3/order', {
+    symbol: SYMBOL, side: 'SELL', type: 'LIMIT',
+    timeInForce: 'GTC', quantity: qty, price
   }, true);
-
-  currentSellOrder = order;
+  currentSellOrder = o;
 }
 
 async function checkFilledOrders() {
-  // Kiểm tra lệnh mua
+  // BUY filled -> lưu lastBuyPrice
   if (currentBuyOrder) {
-    const order = await binanceRequest('GET', '/api/v3/order', {
-      symbol: SYMBOL,
-      orderId: currentBuyOrder.orderId
+    const o = await binanceRequest('GET', '/api/v3/order', {
+      symbol: SYMBOL, orderId: currentBuyOrder.orderId
     }, true);
-
-    if (order.status === 'FILLED') {
-      lastBuyPrice = parseFloat(order.price);
+    if (o.status === 'FILLED') {
+      lastBuyPrice = parseFloat(o.price);
       currentBuyOrder = null;
-      console.log(`✅ Đã mua ${order.executedQty} ${BASE} tại giá ${lastBuyPrice}`);
+      console.log(`✅ Đã mua ${o.executedQty} ${BASE} tại ${lastBuyPrice}`);
     }
   }
 
-  // Kiểm tra lệnh bán
+  // SELL filled -> reset và tái đầu tư (nếu bật)
   if (currentSellOrder) {
-    const order = await binanceRequest('GET', '/api/v3/order', {
-      symbol: SYMBOL,
-      orderId: currentSellOrder.orderId
+    const o = await binanceRequest('GET', '/api/v3/order', {
+      symbol: SYMBOL, orderId: currentSellOrder.orderId
     }, true);
-
-    if (order.status === 'FILLED') {
-      console.log(`💰 Đã bán ${order.executedQty} ${BASE} tại giá ${order.price}`);
+    if (o.status === 'FILLED') {
+      console.log(`💰 Đã bán ${o.executedQty} ${BASE} tại ${o.price}`);
       currentSellOrder = null;
       lastBuyPrice = null;
 
-      // Tái đầu tư sau khi bán
       if (ENABLE_REINVEST) {
-        const balances = await getBalances();
-        if (balances.usdtFree >= BUY_AMOUNT_USD) {
-          const ticker = await binanceRequest('GET', '/api/v3/ticker/price', { symbol: SYMBOL });
-          const currentPrice = parseFloat(ticker.price);
-          const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
-          console.log(`🔄 Tái đầu tư: đặt lệnh mua mới tại ${buyPrice}`);
+        const { usdtFree } = await getBalances();
+        if (usdtFree >= BUY_AMOUNT_USD) {
+          const t = await binanceRequest('GET', '/api/v3/ticker/price', { symbol: SYMBOL });
+          const buyPrice = roundTickSize(parseFloat(t.price) - 10, filters.tickSize);
+          console.log(`🔄 Tái đầu tư: đặt lệnh mua tại ${buyPrice}`);
           await placeBuyOrder(buyPrice);
         } else {
           console.log(`⏸ Không đủ USDT để tái đầu tư (cần ≥ ${BUY_AMOUNT_USD})`);
@@ -341,22 +276,36 @@ async function checkFilledOrders() {
   }
 }
 
-// ====== Vòng lặp bot ======
+// ====== Bot loop ======
 async function botLoop() {
   try {
     await checkOpenOrders();
     await checkFilledOrders();
 
-    const ticker = await binanceRequest('GET', '/api/v3/ticker/price', { symbol: SYMBOL });
-    const currentPrice = parseFloat(ticker.price);
-    const balances = await getBalances();
+    const t = await binanceRequest('GET', '/api/v3/ticker/price', { symbol: SYMBOL });
+    const currentPrice = parseFloat(t.price);
+    const { usdtFree, paxgFree } = await getBalances();
 
-    console.log(`📊 Giá hiện tại: ${currentPrice} | ${QUOTE}: ${balances.usdtFree} | ${BASE}: ${balances.paxgFree}`);
+    console.log(`📊 Giá hiện tại: ${currentPrice} | ${QUOTE}: ${usdtFree} | ${BASE}: ${paxgFree}`);
     console.log(`📌 Lệnh chờ mua: ${currentBuyOrder ? JSON.stringify({ id: currentBuyOrder.orderId, price: currentBuyOrder.price }) : 'Không có'}`);
     console.log(`📌 Lệnh chờ bán: ${currentSellOrder ? JSON.stringify({ id: currentSellOrder.orderId, price: currentSellOrder.price }) : 'Không có'}`);
 
-    // Nếu đang có PAXG và chưa có lệnh SELL -> lấy giá trung bình và đặt SELL toàn bộ tại avg + 20
-    if (balances.paxgFree > 0 && !currentSellOrder) {
+    // Đang có PAXG và chưa có lệnh SELL
+    if (paxgFree > 0 && !currentSellOrder) {
+      // Trường hợp PAXG nhỏ hơn minQty -> coi là dư sau bán trước, chuyển sang đặt BUY nếu đủ USDT
+      if (paxgFree < filters.minQty) {
+        console.log(`ℹ️ PAXG (${paxgFree}) < minQty (${filters.minQty}) → dư sau bán. Kiểm tra USDT để mua lại.`);
+        if (usdtFree >= BUY_AMOUNT_USD) {
+          const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
+          console.log(`🔄 Đặt lệnh MUA mới tại ${buyPrice}`);
+          await placeBuyOrder(buyPrice);
+        } else {
+          console.log(`⏸ Không đủ USDT để mua lại (cần ≥ ${BUY_AMOUNT_USD})`);
+        }
+        return;
+      }
+
+      // Có đủ PAXG để bán: dùng lastBuyPrice hoặc lấy avg
       if (lastBuyPrice === null) {
         const avg = await getAverageBuyPrice(BASE, SYMBOL);
         if (!avg) {
@@ -368,35 +317,37 @@ async function botLoop() {
       }
 
       const sellPrice = roundTickSize(lastBuyPrice + 20, filters.tickSize);
-      await placeSellOrder(sellPrice, balances.paxgFree);
-      return; // ưu tiên đặt bán trước, không đặt mua trong vòng này
+      await placeSellOrder(sellPrice, paxgFree);
+      return; // ưu tiên bán trước
     }
 
-    // Nếu chưa có PAXG, tùy chiến lược: chờ khớp mua hoặc tái đầu tư sẽ lo phần mua.
-    if (balances.paxgFree === 0) {
-      console.log(`⏸ Không có ${BASE} trong ví. Chờ lệnh mua được khớp hoặc tái đầu tư.`);
+    // Không có PAXG: có thể đặt BUY theo thuật toán nếu không có lệnh BUY
+    if (paxgFree === 0 && !currentBuyOrder) {
+      if (usdtFree >= BUY_AMOUNT_USD) {
+        const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
+        await placeBuyOrder(buyPrice);
+      } else {
+        console.log(`❌ USDT < ${BUY_AMOUNT_USD}, chờ tích lũy thêm.`);
+      }
     }
-
-  } catch (err) {
-    console.error('🚨 Lỗi:', err.response?.data || err.message);
+  } catch (e) {
+    console.error('🚨 Lỗi:', e.response?.data || e.message);
   }
 }
 
-// ====== Khởi động bot ======
+// ====== Khởi động ======
 (async () => {
   await loadFilters();
   console.log('🚀 Bot PAXG bắt đầu chạy...');
   setInterval(botLoop, INTERVAL);
 })();
 
-// ====== HTTP server & keepalive ======
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
-app.get('/', (req, res) => res.send('Bot PAXG đang chạy...'));
-
+// ====== HTTP & keepalive ======
+app.get('/health', (_, r) => r.json({ status: 'ok' }));
+app.get('/', (_, r) => r.send('Bot PAXG đang chạy...'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🌐 Server listening on port ${PORT}`));
 
-// Ping giữ dịch vụ sống
 if (KEEPALIVE_URL) {
   setInterval(() => {
     axios.get(KEEPALIVE_URL)
