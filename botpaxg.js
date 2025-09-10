@@ -215,21 +215,23 @@ async function placeBuyOrder(price) {
 
 async function placeSellOrder(price, qtyWanted) {
   const { paxgFree } = await getBalances();
+
+  // Dust: để botLoop xử lý mua lại
   if (paxgFree < filters.minQty) {
-    console.log(`ℹ️ Số dư PAXG (${paxgFree}) < minQty (${filters.minQty}) → coi là dư sau bán trước đó.`);
+    console.log(`ℹ️ PAXG (${paxgFree}) < minQty (${filters.minQty}) → dư sau bán trước đó.`);
     return;
-    // Lưu ý: botLoop sẽ xử lý tái mua khi gặp tình huống này.
   }
 
   let qty = roundStepSize(Math.min(qtyWanted, paxgFree), filters.stepSize);
   if (qty < filters.minQty) {
-    console.log(`❌ Lượng bán (${qty}) < minQty (${filters.minQty})`);
+    console.log(`ℹ️ Lượng bán (${qty}) < minQty (${filters.minQty}) → dư sau bán trước.`);
     return;
   }
   if (qty * price < filters.minNotional) {
-    console.log(`❌ Tổng giá trị bán (${(qty * price).toFixed(2)}) < minNotional (${filters.minNotional})`);
+    console.log(`ℹ️ Tổng giá trị bán (${(qty * price).toFixed(2)}) < minNotional (${filters.minNotional}) → coi là dư.`);
     return;
   }
+
   console.log(`✅ Đặt BÁN ${qty} ${SYMBOL} tại ${price}`);
   const o = await binanceRequest('POST', '/api/v3/order', {
     symbol: SYMBOL, side: 'SELL', type: 'LIMIT',
@@ -290,22 +292,21 @@ async function botLoop() {
     console.log(`📌 Lệnh chờ mua: ${currentBuyOrder ? JSON.stringify({ id: currentBuyOrder.orderId, price: currentBuyOrder.price }) : 'Không có'}`);
     console.log(`📌 Lệnh chờ bán: ${currentSellOrder ? JSON.stringify({ id: currentSellOrder.orderId, price: currentSellOrder.price }) : 'Không có'}`);
 
-    // Đang có PAXG và chưa có lệnh SELL
-    if (paxgFree > 0 && !currentSellOrder) {
-      // Trường hợp PAXG nhỏ hơn minQty -> coi là dư sau bán trước, chuyển sang đặt BUY nếu đủ USDT
-      if (paxgFree < filters.minQty) {
-        console.log(`ℹ️ PAXG (${paxgFree}) < minQty (${filters.minQty}) → dư sau bán. Kiểm tra USDT để mua lại.`);
-        if (usdtFree >= BUY_AMOUNT_USD) {
-          const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
-          console.log(`🔄 Đặt lệnh MUA mới tại ${buyPrice}`);
-          await placeBuyOrder(buyPrice);
-        } else {
-          console.log(`⏸ Không đủ USDT để mua lại (cần ≥ ${BUY_AMOUNT_USD})`);
-        }
-        return;
+    // Dust PAXG: coi là dư sau bán -> chuyển sang BUY nếu đủ USDT
+    if (paxgFree > 0 && paxgFree < filters.minQty && !currentBuyOrder) {
+      console.log(`ℹ️ PAXG (${paxgFree}) < minQty (${filters.minQty}) → dư sau bán. Kiểm tra USDT để mua lại.`);
+      if (usdtFree >= BUY_AMOUNT_USD) {
+        const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
+        console.log(`🔄 Đặt lệnh MUA mới tại ${buyPrice}`);
+        await placeBuyOrder(buyPrice);
+      } else {
+        console.log(`⏸ Không đủ USDT để mua lại (cần ≥ ${BUY_AMOUNT_USD})`);
       }
+      return;
+    }
 
-      // Có đủ PAXG để bán: dùng lastBuyPrice hoặc lấy avg
+    // Đang có PAXG đủ để bán và chưa có SELL -> đặt SELL theo giá trung bình + 20
+    if (paxgFree >= filters.minQty && !currentSellOrder) {
       if (lastBuyPrice === null) {
         const avg = await getAverageBuyPrice(BASE, SYMBOL);
         if (!avg) {
@@ -315,13 +316,12 @@ async function botLoop() {
         lastBuyPrice = avg;
         console.log(`📈 Giá trung bình mua vào của ${BASE}: ${lastBuyPrice}`);
       }
-
       const sellPrice = roundTickSize(lastBuyPrice + 20, filters.tickSize);
       await placeSellOrder(sellPrice, paxgFree);
       return; // ưu tiên bán trước
     }
 
-    // Không có PAXG: có thể đặt BUY theo thuật toán nếu không có lệnh BUY
+    // Không có PAXG (hoặc đã xử lý ở trên): có thể đặt BUY nếu chưa có BUY
     if (paxgFree === 0 && !currentBuyOrder) {
       if (usdtFree >= BUY_AMOUNT_USD) {
         const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
