@@ -93,8 +93,25 @@ async function checkOpenOrders() {
 }
 
 async function placeBuyOrder(price) {
-  const qty = roundStepSize(BUY_AMOUNT_USD / price, filters.stepSize);
-  console.log(`Đặt MUA ${qty} ${SYMBOL} tại ${price}`);
+  const balances = await getBalances();
+  let maxBuyUSD = Math.min(BUY_AMOUNT_USD, balances.usdtFree); // chỉ dùng số dư khả dụng
+  if (maxBuyUSD <= 0) {
+    console.log(`❌ Không đủ USDT để mua. Số dư: ${balances.usdtFree}`);
+    return;
+  }
+
+  let qty = maxBuyUSD / price;
+
+  // Làm tròn theo stepSize
+  qty = parseFloat(roundStepSize(qty, filters.stepSize));
+
+  // Kiểm tra minNotional
+  if (qty * price < filters.minNotional) {
+    console.log(`❌ Lệnh mua không đạt minNotional (${filters.minNotional} ${QUOTE})`);
+    return;
+  }
+
+  console.log(`✅ Đặt MUA ${qty} ${SYMBOL} tại ${price}`);
   const order = await binanceRequest('POST', '/api/v3/order', {
     symbol: SYMBOL,
     side: 'BUY',
@@ -107,14 +124,28 @@ async function placeBuyOrder(price) {
 }
 
 async function placeSellOrder(price, qty) {
-  qty = roundStepSize(qty, filters.stepSize);
-  console.log(`Đặt BÁN ${qty} ${SYMBOL} tại ${price}`);
+  const balances = await getBalances();
+  let sellQty = Math.min(qty, balances.paxgFree); // chỉ bán số lượng khả dụng
+
+  sellQty = parseFloat(roundStepSize(sellQty, filters.stepSize));
+
+  if (sellQty * price < filters.minNotional) {
+    console.log(`❌ Lệnh bán không đạt minNotional (${filters.minNotional} ${QUOTE})`);
+    return;
+  }
+
+  if (sellQty <= 0) {
+    console.log(`❌ Không đủ ${BASE} để bán. Số dư: ${balances.paxgFree}`);
+    return;
+  }
+
+  console.log(`✅ Đặt BÁN ${sellQty} ${SYMBOL} tại ${price}`);
   const order = await binanceRequest('POST', '/api/v3/order', {
     symbol: SYMBOL,
     side: 'SELL',
     type: 'LIMIT',
     timeInForce: 'GTC',
-    quantity: qty,
+    quantity: sellQty,
     price: price
   }, true);
   currentSellOrder = order;
@@ -190,5 +221,6 @@ setInterval(() => {
     .then(res => console.log(`Ping at ${new Date().toISOString()} - ${res.status}`))
     .catch(err => console.error(`Ping error: ${err.message}`));
 }, 14 * 60 * 1000); // 14 min
+
 
 
