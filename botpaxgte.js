@@ -301,7 +301,7 @@ async function botLoop() {
 
     console.log(`📊 ${SYMBOL}: ${currentPrice} | USDT: ${usdtFree} | PAXG: ${paxgFree}`);
     await sendTelegramMessage(`📊 ${SYMBOL}: ${currentPrice} | USDT: ${usdtFree} | PAXG: ${paxgFree}
-    📌 Orders: BUY=${currentBuyOrder?currentBuyOrder.orderId:'–'} - ${currentBuyOrder?currentBuyOrder.price:'–'} 
+    📌 Orders: BUY=${currentBuyOrder?currentBuyOrder.orderId:'–'} - ${currentBuyOrder?currentBuyOrder.price:'–'}
     SELL=${currentSellOrder?currentSellOrder.orderId:'–'} - ${currentSellOrder?currentSellOrder.price:'–'}`);
     console.log(`📌 Orders: BUY=${currentBuyOrder?currentBuyOrder.orderId:'–'} SELL=${currentSellOrder?currentSellOrder.orderId:'–'}`);
 
