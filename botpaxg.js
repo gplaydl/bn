@@ -267,7 +267,7 @@ async function checkFilledOrders() {
         const { usdtFree } = await getBalances();
         if (usdtFree >= BUY_AMOUNT_USD) {
           const t = await binanceRequest('GET', '/api/v3/ticker/price', { symbol: SYMBOL });
-          const buyPrice = roundTickSize(parseFloat(t.price) - 10, filters.tickSize);
+          const buyPrice = roundTickSize(parseFloat(t.price) - 8, filters.tickSize);
           console.log(`🔄 Tái đầu tư: đặt lệnh mua tại ${buyPrice}`);
           await placeBuyOrder(buyPrice);
         } else {
@@ -296,7 +296,7 @@ async function botLoop() {
     if (paxgFree > 0 && paxgFree < filters.minQty && !currentBuyOrder) {
       console.log(`ℹ️ PAXG (${paxgFree}) < minQty (${filters.minQty}) → dư sau bán. Kiểm tra USDT để mua lại.`);
       if (usdtFree >= BUY_AMOUNT_USD) {
-        const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
+        const buyPrice = roundTickSize(currentPrice - 8, filters.tickSize);
         console.log(`🔄 Đặt lệnh MUA mới tại ${buyPrice}`);
         await placeBuyOrder(buyPrice);
       } else {
@@ -305,7 +305,7 @@ async function botLoop() {
       return;
     }
 
-    // Đang có PAXG đủ để bán và chưa có SELL -> đặt SELL theo giá trung bình + 20
+    // Đang có PAXG đủ để bán và chưa có SELL -> đặt SELL theo giá trung bình + 16
     if (paxgFree >= filters.minQty && !currentSellOrder) {
       if (lastBuyPrice === null) {
         const avg = await getAverageBuyPrice(BASE, SYMBOL);
@@ -316,7 +316,7 @@ async function botLoop() {
         lastBuyPrice = avg;
         console.log(`📈 Giá trung bình mua vào của ${BASE}: ${lastBuyPrice}`);
       }
-      const sellPrice = roundTickSize(lastBuyPrice + 20, filters.tickSize);
+      const sellPrice = roundTickSize(lastBuyPrice + 16, filters.tickSize);
       await placeSellOrder(sellPrice, paxgFree);
       return; // ưu tiên bán trước
     }
@@ -324,7 +324,7 @@ async function botLoop() {
     // Không có PAXG (hoặc đã xử lý ở trên): có thể đặt BUY nếu chưa có BUY
     if (paxgFree === 0 && !currentBuyOrder) {
       if (usdtFree >= BUY_AMOUNT_USD) {
-        const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
+        const buyPrice = roundTickSize(currentPrice - 8, filters.tickSize);
         await placeBuyOrder(buyPrice);
       } else {
         console.log(`❌ USDT < ${BUY_AMOUNT_USD}, chờ tích lũy thêm.`);
@@ -355,3 +355,4 @@ if (KEEPALIVE_URL) {
       .catch(err => console.error(`Ping error: ${err.message}`));
   }, 14 * 60 * 1000);
 }
+
