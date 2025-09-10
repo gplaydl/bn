@@ -180,20 +180,27 @@ async function botLoop() {
     await checkOpenOrders();
     await checkFilledOrders();
 
+    const ticker = await binanceRequest('GET', '/api/v3/ticker/price', { symbol: SYMBOL });
+    const currentPrice = parseFloat(ticker.price);
+    const balances = await getBalances();
+
+    console.log(`📊 Giá hiện tại: ${currentPrice} | USDT: ${balances.usdtFree} | ${BASE}: ${balances.paxgFree}`);
+    console.log(`📌 Lệnh chờ mua: ${currentBuyOrder ? JSON.stringify(currentBuyOrder) : 'Không có'}`);
+    console.log(`📌 Lệnh chờ bán: ${currentSellOrder ? JSON.stringify(currentSellOrder) : 'Không có'}`);
+
+    // Nếu không có lệnh chờ
     if (!currentBuyOrder && !currentSellOrder) {
-      const ticker = await binanceRequest('GET', '/api/v3/ticker/price', { symbol: SYMBOL });
-      const currentPrice = parseFloat(ticker.price);
-      const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
-      await placeBuyOrder(buyPrice);
+      // Chỉ mua khi đủ USDT tối thiểu
+      if (balances.usdtFree >= filters.minNotional) {
+        const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
+        await placeBuyOrder(buyPrice);
+      } else {
+        console.log(`❌ Không đủ USDT để đặt lệnh mua (cần >= ${filters.minNotional} ${QUOTE})`);
+      }
     }
 
-    const ticker = await binanceRequest('GET', '/api/v3/ticker/price', { symbol: SYMBOL });
-    const balances = await getBalances();
-    console.log(`Giá hiện tại: ${ticker.price} | USDT: ${balances.usdtFree} | PAXG: ${balances.paxgFree}`);
-    console.log(`Lệnh chờ mua: ${currentBuyOrder ? JSON.stringify(currentBuyOrder) : 'Không có'}`);
-    console.log(`Lệnh chờ bán: ${currentSellOrder ? JSON.stringify(currentSellOrder) : 'Không có'}`);
   } catch (err) {
-    console.error('Lỗi:', err.response?.data || err.message);
+    console.error('🚨 Lỗi:', err.response?.data || err.message);
   }
 }
 
@@ -221,6 +228,7 @@ setInterval(() => {
     .then(res => console.log(`Ping at ${new Date().toISOString()} - ${res.status}`))
     .catch(err => console.error(`Ping error: ${err.message}`));
 }, 14 * 60 * 1000); // 14 min
+
 
 
 
