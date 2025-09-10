@@ -302,7 +302,7 @@ async function botLoop() {
     console.log(`📊 ${SYMBOL}: ${currentPrice} | USDT: ${usdtFree} | PAXG: ${paxgFree}`);
     await sendTelegramMessage(`📊 ${SYMBOL}: ${currentPrice} | USDT: ${usdtFree} | PAXG: ${paxgFree}`);
     console.log(`📌 Orders: BUY=${currentBuyOrder?currentBuyOrder.orderId:'–'} SELL=${currentSellOrder?currentSellOrder.orderId:'–'}`);
-    await sendTelegramMessage(`📌 Orders: BUY=${currentBuyOrder?currentBuyOrder.orderId:'–'} SELL=${currentSellOrder?currentSellOrder.orderId:'–'}`);
+    await sendTelegramMessage(`📌 Orders: BUY=${currentBuyOrder?currentBuyOrder.orderId:'–'} - ${currentBuyOrder?currentBuyOrder.price:'–'} SELL=${currentSellOrder?currentSellOrder.orderId:'–'}`);
 
     // Dust PAXG → mua lại
     if (paxgFree > 0 && paxgFree < filters.minQty && !currentBuyOrder) {
