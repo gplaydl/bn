@@ -193,8 +193,8 @@ async function checkOpenOrders() {
   const orders = await binanceRequest('GET', '/api/v3/openOrders', { symbol: SYMBOL }, true);
   currentBuyOrder  = orders.find(o => o.side === 'BUY')  || null;
   currentSellOrder = orders.find(o => o.side === 'SELL') || null;
-  console.log(JSON.stringify(currentBuyOrder, null, 2));
-  console.log(JSON.stringify(currentSellOrder, null, 2));
+  // console.log(JSON.stringify(currentBuyOrder, null, 2));
+  // console.log(JSON.stringify(currentSellOrder, null, 2));
 }
 
 async function placeBuyOrder(price) {
