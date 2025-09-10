@@ -170,8 +170,9 @@ async function checkFilledOrders() {
       const qtyBought = parseFloat(order.executedQty);
 
       console.log(`✅ Đã mua ${qtyBought} ${BASE} tại giá ${lastBuyPrice}`);
-      console.log(`📌 Tạo lệnh bán tại giá ${sellPrice}`);
+      console.log(`📌 Tạo lệnh bán ngay tại giá ${sellPrice}`);
 
+      // Đặt lệnh bán ngay sau khi mua
       await placeSellOrder(sellPrice, qtyBought);
     }
   }
@@ -190,6 +191,7 @@ async function checkFilledOrders() {
     }
   }
 }
+
 
 
 async function botLoop() {
@@ -251,6 +253,7 @@ setInterval(() => {
     .then(res => console.log(`Ping at ${new Date().toISOString()} - ${res.status}`))
     .catch(err => console.error(`Ping error: ${err.message}`));
 }, 14 * 60 * 1000); // 14 min
+
 
 
 
