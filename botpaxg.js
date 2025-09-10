@@ -207,19 +207,20 @@ async function botLoop() {
     console.log(`📌 Lệnh chờ mua: ${currentBuyOrder ? JSON.stringify(currentBuyOrder) : 'Không có'}`);
     console.log(`📌 Lệnh chờ bán: ${currentSellOrder ? JSON.stringify(currentSellOrder) : 'Không có'}`);
 
-    // Nếu đã mua PAXG và chưa có lệnh SELL thì đặt lệnh bán
-    if (!currentSellOrder && lastBuyPrice !== null) {
-      const sellPrice = roundTickSize(lastBuyPrice + 20, filters.tickSize);
-      await placeSellOrder(sellPrice, balances.paxgFree);
-      return; // Ưu tiên bán trước, không đặt lệnh mua trong vòng này
-    }
-
-    // Nếu chưa có lệnh mua/bán và USDT đủ 80 thì đặt lệnh mua
-    if (!currentBuyOrder && !currentSellOrder && balances.usdtFree >= BUY_AMOUNT_USD) {
-      const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
-      await placeBuyOrder(buyPrice);
-    } else if (balances.usdtFree < BUY_AMOUNT_USD) {
-      console.log(`❌ Không đủ USDT để đặt lệnh mua (cần >= ${BUY_AMOUNT_USD} ${QUOTE})`);
+    // Nếu không có lệnh chờ mua và bán
+    if (!currentBuyOrder && !currentSellOrder) {
+      // Nếu có PAXG và đã từng mua thì đặt lệnh bán
+      if (balances.paxgFree > 0 && lastBuyPrice !== null) {
+        const sellPrice = roundTickSize(lastBuyPrice + 20, filters.tickSize);
+        await placeSellOrder(sellPrice, balances.paxgFree);
+      }
+      // Nếu không có PAXG thì kiểm tra USDT để đặt lệnh mua
+      else if (balances.usdtFree >= BUY_AMOUNT_USD) {
+        const buyPrice = roundTickSize(currentPrice - 10, filters.tickSize);
+        await placeBuyOrder(buyPrice);
+      } else {
+        console.log(`❌ Không đủ USDT để đặt lệnh mua (cần >= ${BUY_AMOUNT_USD} ${QUOTE})`);
+      }
     }
 
   } catch (err) {
@@ -253,6 +254,7 @@ setInterval(() => {
     .then(res => console.log(`Ping at ${new Date().toISOString()} - ${res.status}`))
     .catch(err => console.error(`Ping error: ${err.message}`));
 }, 14 * 60 * 1000); // 14 min
+
 
 
 
