@@ -272,7 +272,7 @@ async function checkFilledOrders() {
       console.log(`💰 BÁN khớp: ${o.executedQty}@${o.price}`);
       await sendTelegramMessage(`💰 BÁN khớp *${o.executedQty} ${BASE}* @ ${o.price}`);
       currentSellOrder = null;
-      lastBuyPrice     = null;
+      lastBuyPrice     = parseFloat(o.price);;
 
       // Tái đầu tư
       if (ENABLE_REINVEST) {
