@@ -14,10 +14,9 @@ const QUOTE           = 'USDT';
 const BASE            = 'PAXG';
 const BUY_AMOUNT_USD  = 80;
 const INTERVAL        = 30_000;
-const ENABLE_REINVEST = true;
 const KEEPALIVE_URL   = process.env.KEEPALIVE_URL || 'https://bn-5l7b.onrender.com/health';
-const BUY_UNDER_USD   = 5;   // đặt mua ở giá market - BUY_UNDER_USD
-const SELL_OVER_USD   = 10;  // đặt bán ở giá mua + SELL_OVER_USD
+const BUY_UNDER_USD   = 5;   // đặt mua ở giá thị trường - 5
+const SELL_OVER_USD   = 10;  // đặt bán ở giá mua + 10
 
 // ====== Telegram Bot ======
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -45,7 +44,6 @@ if (!API_KEY || !API_SECRET) {
   console.error('❌ Thiếu BINANCE_API_KEY hoặc BINANCE_API_SECRET');
   process.exit(1);
 }
-
 const BINANCE = axios.create({
   baseURL: 'https://api.binance.com',
   timeout: 15_000,
@@ -57,211 +55,126 @@ function signQuery(paramsObj) {
   const signature = crypto.createHmac('sha256', API_SECRET).update(qs).digest('hex');
   return `${qs}&signature=${signature}`;
 }
-
 async function binanceGET(path, params = {}) {
   const query = signQuery({ ...params, timestamp: Date.now(), recvWindow: 5000 });
   const { data } = await BINANCE.get(`${path}?${query}`);
   return data;
 }
-
 async function binancePOST(path, params = {}) {
   const query = signQuery({ ...params, timestamp: Date.now(), recvWindow: 5000 });
   const { data } = await BINANCE.post(`${path}?${query}`);
   return data;
 }
 
-// ====== Trạng thái & Filters ======
-let filters = {
-  tickSize:    0,
-  stepSize:    0,
-  minNotional: 0,
-  minQty:      0,
-  minPrice:    0,
-  maxPrice:    Infinity,
-  maxQty:      Infinity
-};
+// ====== Filters & Helpers ======
+let filters = { tickSize:0, stepSize:0, minNotional:0, minQty:0, minPrice:0, maxPrice:Infinity, maxQty:Infinity };
 
-// ====== Helpers làm tròn & kiểm tra ======
-function toNumber(x) {
-  return typeof x === 'number' ? x : Number(x);
-}
+function toNumber(x) { return typeof x==='number' ? x : Number(x); }
+function decimalPlaces(s) { return String(s).includes('.') ? String(s).split('.')[1].replace(/0+$/,'').length : 0; }
+function floorToStep(v, step) { v=toNumber(v); step=toNumber(step); return step===0?v:Math.floor(v/step)*step; }
+function roundToTick(v, tick) { v=toNumber(v); tick=toNumber(tick); return tick===0?v:Math.floor(v/tick)*tick; }
+function ceilToTick(v, tick)  { v=toNumber(v); tick=toNumber(tick); return tick===0?v:Math.ceil(v/tick)*tick; }
+function formatByTick(v, tick){ return toNumber(v).toFixed(Math.max(decimalPlaces(tick),0)); }
+function formatByStep(v, step){ return toNumber(v).toFixed(Math.max(decimalPlaces(step),0)); }
+function ensureNotional(p, q, minN){ return toNumber(p)*toNumber(q) >= toNumber(minN); }
 
-function decimalPlaces(numStr) {
-  const s = String(numStr);
-  if (!s.includes('.')) return 0;
-  return s.split('.')[1].replace(/0+$/, '').length;
-}
-
-function floorToStep(value, step) {
-  const v = toNumber(value), s = toNumber(step);
-  return s === 0 ? v : Math.floor(v / s) * s;
-}
-
-function roundToTick(value, tick) {
-  const v = toNumber(value), t = toNumber(tick);
-  return t === 0 ? v : Math.floor(v / t) * t;
-}
-
-function ceilToTick(value, tick) {
-  const v = toNumber(value), t = toNumber(tick);
-  return t === 0 ? v : Math.ceil(v / t) * t;
-}
-
-function formatByTick(value, tick) {
-  const dp = Math.max(decimalPlaces(tick), 0);
-  return toNumber(value).toFixed(dp);
-}
-
-function formatByStep(value, step) {
-  const dp = Math.max(decimalPlaces(step), 0);
-  return toNumber(value).toFixed(dp);
-}
-
-function ensureNotional(price, qty, minNotional) {
-  return toNumber(price) * toNumber(qty) >= toNumber(minNotional);
-}
-
-// ====== Load filter từ exchangeInfo ======
+// ====== Load symbol filters ======
 async function loadSymbolFilters() {
-  const { data } = await BINANCE.get('/api/v3/exchangeInfo', { params: { symbol: SYMBOL } });
-  const sym = data.symbols?.[0];
-  if (!sym) throw new Error('Không tìm thấy symbol trong exchangeInfo');
-  const priceFilter = sym.filters.find(f => f.filterType === 'PRICE_FILTER');
-  const lotSize     = sym.filters.find(f => f.filterType === 'LOT_SIZE');
-  const minNotional = sym.filters.find(f => f.filterType === 'MIN_NOTIONAL') 
-                     || sym.filters.find(f => f.filterType === 'NOTIONAL');
-
-  filters.tickSize    = toNumber(priceFilter?.tickSize  || '0');
-  filters.minPrice    = toNumber(priceFilter?.minPrice  || '0');
-  filters.maxPrice    = toNumber(priceFilter?.maxPrice  || '0');
-  filters.stepSize    = toNumber(lotSize?.stepSize      || '0');
-  filters.minQty      = toNumber(lotSize?.minQty        || '0');
-  filters.maxQty      = toNumber(lotSize?.maxQty        || '0');
-  filters.minNotional = toNumber(minNotional?.minNotional || minNotional?.notional || '0');
+  const { data } = await BINANCE.get('/api/v3/exchangeInfo', { params:{symbol:SYMBOL} });
+  const sym = data.symbols?.[0]; if (!sym) throw new Error('Không tìm thấy symbol');
+  const pf = sym.filters.find(f=>f.filterType==='PRICE_FILTER');
+  const ls = sym.filters.find(f=>f.filterType==='LOT_SIZE');
+  const mn = sym.filters.find(f=>f.filterType==='MIN_NOTIONAL')||sym.filters.find(f=>f.filterType==='NOTIONAL');
+  filters.tickSize    = toNumber(pf?.tickSize||0);
+  filters.minPrice    = toNumber(pf?.minPrice||0);
+  filters.maxPrice    = toNumber(pf?.maxPrice||Infinity);
+  filters.stepSize    = toNumber(ls?.stepSize||0);
+  filters.minQty      = toNumber(ls?.minQty||0);
+  filters.maxQty      = toNumber(ls?.maxQty||Infinity);
+  filters.minNotional = toNumber(mn?.minNotional||mn?.notional||0);
 }
 
-// ====== API tài khoản, giá, orders ======
+// ====== Binance helper APIs ======
 async function getBalances() {
   const acc = await binanceGET('/api/v3/account');
-  const getFree = asset => toNumber(acc.balances.find(b => b.asset === asset)?.free || '0');
-  return { usdtFree: getFree(QUOTE), baseFree: getFree(BASE) };
+  const findFree = a => toNumber(acc.balances.find(b=>b.asset===a)?.free||0);
+  return { usdtFree:findFree(QUOTE), baseFree:findFree(BASE) };
 }
-
 async function getCurrentPrice() {
-  const { data } = await BINANCE.get('/api/v3/ticker/price', { params: { symbol: SYMBOL } });
+  const { data } = await BINANCE.get('/api/v3/ticker/price',{params:{symbol:SYMBOL}});
   return toNumber(data.price);
 }
-
 async function getOpenOrders() {
-  return await binanceGET('/api/v3/openOrders', { symbol: SYMBOL });
+  return await binanceGET('/api/v3/openOrders',{ symbol:SYMBOL });
 }
-
 async function getOrder(orderId) {
-  return await binanceGET('/api/v3/order', { symbol: SYMBOL, orderId });
+  return await binanceGET('/api/v3/order',{ symbol:SYMBOL, orderId });
 }
-
-async function placeLimit(side, price, quantity) {
-  const priceAdj = formatByTick(price, filters.tickSize);
-  const qtyAdj   = formatByStep(quantity, filters.stepSize);
-  const p = toNumber(priceAdj), q = toNumber(qtyAdj);
-
-  if (p < filters.minPrice || p > filters.maxPrice)
-    throw new Error(`Giá ${p} ngoài khoảng [${filters.minPrice},${filters.maxPrice}]`);
-  if (q < filters.minQty   || q > filters.maxQty)
-    throw new Error(`Qty ${q} ngoài khoảng [${filters.minQty},${filters.maxQty}]`);
-  if (!ensureNotional(p, q, filters.minNotional))
-    throw new Error(`Notional ${p*q} < minNotional ${filters.minNotional}`);
-
-  const params = {
-    symbol: SYMBOL,
-    side,
-    type: 'LIMIT',
-    timeInForce: 'GTC',
-    price: priceAdj,
-    quantity: qtyAdj,
-    newOrderRespType: 'RESULT'
-  };
-  return await binancePOST('/api/v3/order', params);
+async function placeLimit(side, price, qty) {
+  const pAdj = formatByTick(price, filters.tickSize);
+  const qAdj = formatByStep(qty,    filters.stepSize);
+  if (toNumber(pAdj)<filters.minPrice||toNumber(pAdj)>filters.maxPrice)
+    throw new Error(`Giá ${pAdj} ngoài [${filters.minPrice},${filters.maxPrice}]`);
+  if (toNumber(qAdj)<filters.minQty||toNumber(qAdj)>filters.maxQty)
+    throw new Error(`Qty ${qAdj} ngoài [${filters.minQty},${filters.maxQty}]`);
+  if (!ensureNotional(pAdj,qAdj,filters.minNotional))
+    throw new Error(`Notional ${(pAdj*qAdj)} < ${filters.minNotional}`);
+  return await binancePOST('/api/v3/order', {
+    symbol:SYMBOL, side, type:'LIMIT', timeInForce:'GTC',
+    price:pAdj, quantity:qAdj, newOrderRespType:'RESULT'
+  });
 }
-
-async function waitFilled(orderId, timeoutMs = 300_000, pollMs = 3_000) {
+async function waitFilled(orderId, timeout=300000, interval=3000) {
   const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const ord = await getOrder(orderId);
-    if (ord.status === 'FILLED') return ord;
-    if (['CANCELED','REJECTED','EXPIRED'].includes(ord.status))
-      throw new Error(`Order ${orderId} kết thúc: ${ord.status}`);
-    await new Promise(r => setTimeout(r, pollMs));
+  while (Date.now()-start < timeout) {
+    const o = await getOrder(orderId);
+    if (o.status==='FILLED') return o;
+    if (['CANCELED','REJECTED','EXPIRED'].includes(o.status))
+      throw new Error(`Order ${orderId} kết thúc: ${o.status}`);
+    await new Promise(r=>setTimeout(r,interval));
   }
-  throw new Error(`Đợi order ${orderId} FILLED quá thời gian`);
+  throw new Error(`Đợi order ${orderId} FILLED quá giờ`);
 }
 
 // ====== Logic chính ======
 async function mainCycle() {
   try {
-    if (!filters.tickSize || !filters.stepSize) {
-      await loadSymbolFilters();
-    }
+    if (!filters.tickSize) await loadSymbolFilters();
 
-    const [price, balances, openOrders] = await Promise.all([
+    const [price, {usdtFree}, openOrders] = await Promise.all([
       getCurrentPrice(),
       getBalances(),
       getOpenOrders()
     ]);
-    const { usdtFree } = balances;
 
-    // 1. Kiểm tra SELL limit đang chờ
-    const sellOrders = openOrders.filter(o => o.side === 'SELL' && o.status === 'NEW');
-    if (sellOrders.length > 0) {
-      const sell = sellOrders[0];
-      await sendTelegramMessage(
+    // 1. Nếu có lệnh SELL chờ → thông báo
+    const sellPending = openOrders.find(o=>o.side==='SELL'&&o.status==='NEW');
+    if (sellPending) {
+      return sendTelegramMessage(
         `📊 ${SYMBOL}\n` +
-        `• Giá hiện tại: ${price}\n` +
-        `• USDT khả dụng: ${usdtFree}\n` +
-        `• SELL chờ: ID=${sell.orderId} | Giá=${sell.price} | SL=${sell.origQty}`
+        `• Giá thị trường : ${price}\n` +
+        `• USDT khả dụng : ${usdtFree}\n` +
+        `• SELL chờ : ID=${sellPending.orderId} | Giá=${sellPending.price} | SL=${sellPending.origQty}`
       );
-      return;
     }
 
-    // 2. Nếu không có SELL, check USDT và đặt BUY
+    // 2. Không có SELL, nếu USDT > BUY_AMOUNT_USD → đặt BUY
     if (usdtFree <= BUY_AMOUNT_USD) {
-      await sendTelegramMessage(
+      return sendTelegramMessage(
         `ℹ️ ${SYMBOL}\n` +
         `• Không có SELL chờ\n` +
         `• USDT (${usdtFree}) không đủ > ${BUY_AMOUNT_USD}`
       );
-      return;
     }
 
-    let buyPriceRaw = price - BUY_UNDER_USD;
-    buyPriceRaw = Math.max(buyPriceRaw, filters.minPrice);
-    const buyPrice = roundToTick(buyPriceRaw, filters.tickSize);
+    // Tính giá và SL BUY
+    let rawBuy = Math.max(price - BUY_UNDER_USD, filters.minPrice);
+    const buyPrice = roundToTick(rawBuy, filters.tickSize);
     let buyQty = floorToStep(BUY_AMOUNT_USD / buyPrice, filters.stepSize);
 
-    if (buyQty < filters.minQty) {
-      const needed = filters.minQty * buyPrice;
-      if (needed <= usdtFree) buyQty = filters.minQty;
-      else {
-        await sendTelegramMessage(
-          `⚠️ ${SYMBOL}\n` +
-          `• Qty < minQty và USDT không đủ nâng lên minQty`
-        );
-        return;
-      }
-    }
-
-    if (!ensureNotional(buyPrice, buyQty, filters.minNotional)) {
-      const neededQty = Math.ceil((filters.minNotional / buyPrice) / filters.stepSize) * filters.stepSize;
-      const cost = neededQty * buyPrice;
-      if (cost <= usdtFree && neededQty <= filters.maxQty) buyQty = neededQty;
-      else {
-        await sendTelegramMessage(
-          `⚠️ ${SYMBOL}\n` +
-          `• Không thể đạt minNotional`
-        );
-        return;
-      }
-    }
+    if (buyQty < filters.minQty) buyQty = filters.minQty;
+    if (!ensureNotional(buyPrice, buyQty, filters.minNotional))
+      throw new Error('Không thể đạt minNotional khi BUY');
 
     const buyOrder = await placeLimit('BUY', buyPrice, buyQty);
     await sendTelegramMessage(
@@ -271,31 +184,30 @@ async function mainCycle() {
       `• SL: ${buyOrder.origQty}`
     );
 
+    // Đợi BUY FILLED
     const filled = await waitFilled(buyOrder.orderId);
-    const executedQty = toNumber(filled.executedQty || '0');
-    const cumQuote    = toNumber(filled.cummulativeQuoteQty || '0');
-    const avgBuyPrice = executedQty > 0 ? (cumQuote / executedQty) : toNumber(filled.price);
+    const executedQty = toNumber(filled.executedQty || 0);
+    const cumQuote    = toNumber(filled.cummulativeQuoteQty || 0);
+    // Nếu không có executedQty, avgBuyPrice sẽ null
+    const avgBuyPrice = executedQty > 0
+      ? (cumQuote / executedQty)
+      : null;
 
     await sendTelegramMessage(
       `✅ BUY FILLED ${SYMBOL}\n` +
       `• ID: ${filled.orderId}\n` +
-      `• SL: ${executedQty}\n` +
-      `• Giá TB: ${avgBuyPrice.toFixed(decimalPlaces(filters.tickSize))}`
+      `• SL khớp : ${executedQty}\n` +
+      `• Giá TB   : ${avgBuyPrice ?? 'null'}`
     );
 
-    // Đặt SELL ngay
-    let sellPriceRaw = avgBuyPrice + SELL_OVER_USD;
-    sellPriceRaw = Math.min(Math.max(sellPriceRaw, filters.minPrice), filters.maxPrice);
-    const sellPrice = formatByTick(ceilToTick(sellPriceRaw, filters.tickSize), filters.tickSize);
-    let sellQty = floorToStep(executedQty, filters.stepSize);
+    // 3. Đặt SELL: base = avgBuyPrice || price
+    const baseSell = avgBuyPrice ?? price;
+    let rawSell = Math.min(Math.max(baseSell + SELL_OVER_USD, filters.minPrice), filters.maxPrice);
+    const sellPrice = formatByTick(ceilToTick(rawSell, filters.tickSize), filters.tickSize);
+    const sellQty   = floorToStep(executedQty, filters.stepSize);
 
-    if (sellQty < filters.minQty) {
-      await sendTelegramMessage(`⚠️ Không thể đặt SELL: Qty < minQty`);
-      return;
-    }
-    if (!ensureNotional(sellPrice, sellQty, filters.minNotional)) {
-      await sendTelegramMessage(`⚠️ Không thể đặt SELL: Notional < minNotional`);
-      return;
+    if (sellQty < filters.minQty || !ensureNotional(sellPrice, sellQty, filters.minNotional)) {
+      return sendTelegramMessage(`⚠️ Bỏ qua đặt SELL: mất điều kiện qty/minNotional`);
     }
 
     const sellOrder = await placeLimit('SELL', sellPrice, sellQty);
@@ -303,12 +215,12 @@ async function mainCycle() {
       `🟥 ĐẶT SELL ${SYMBOL}\n` +
       `• ID: ${sellOrder.orderId}\n` +
       `• Giá: ${sellOrder.price}\n` +
-      `• SL: ${sellOrder.origQty}`
+      `• SL : ${sellOrder.origQty}`
     );
 
-  } catch (e) {
-    const msg = e.response?.data ? JSON.stringify(e.response.data) : e.message;
-    console.error('❌ mainCycle error:', msg);
+  } catch (err) {
+    const msg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error('❌ mainCycle lỗi:', msg);
     await sendTelegramMessage(`❌ Lỗi: ${msg}`);
   }
 }
@@ -334,6 +246,6 @@ app.listen(PORT, () => console.log(`🌐 Server tại port ${PORT}`));
 
 if (KEEPALIVE_URL) {
   setInterval(() => {
-    axios.get(KEEPALIVE_URL).catch(() => {/* ignore */});
+    axios.get(KEEPALIVE_URL).catch(()=>{/* ignore */});
   }, 14 * 60 * 1000);
 }
