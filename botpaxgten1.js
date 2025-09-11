@@ -29,9 +29,9 @@ async function sendTelegramMessage(text) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   try {
     await axios.post(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-      { chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'Markdown' }
-    );
+  `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+  { chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'Markdown' }
+  );
   } catch (e) {
     console.error('🚨 Lỗi gửi Telegram:', e.response?.data || e.message);
   }
@@ -141,7 +141,7 @@ async function mainCycle() {
   try {
     if (!filters.tickSize) await loadSymbolFilters();
 
-    const [price, {usdtFree}, openOrders] = await Promise.all([
+    const [price, {usdtFree, baseFree}, openOrders] = await Promise.all([
       getCurrentPrice(),
       getBalances(),
       getOpenOrders()
@@ -151,72 +151,103 @@ async function mainCycle() {
     const sellPending = openOrders.find(o=>o.side==='SELL'&&o.status==='NEW');
     if (sellPending) {
       return sendTelegramMessage(
-        `📊 ${SYMBOL}\n` +
-        `• Giá thị trường : ${price}\n` +
-        `• USDT khả dụng : ${usdtFree}\n` +
-        `• SELL chờ : ID=${sellPending.orderId} | Giá=${sellPending.price} | SL=${sellPending.origQty}`
-      );
+        `📊 ${SYMBOL}
+      ` +
+      `• Giá thị trường : ${price}
+    ` +
+    `• USDT khả dụng : ${usdtFree}
+  ` +
+`• SELL chờ : ID=${sellPending.orderId} | Giá=${sellPending.price} | SL=${sellPending.origQty}`
+);
     }
 
     // 2. Không có SELL, nếu USDT > BUY_AMOUNT_USD → đặt BUY
-    if (usdtFree <= BUY_AMOUNT_USD) {
-      return sendTelegramMessage(
-        `ℹ️ ${SYMBOL}\n` +
-        `• Không có SELL chờ\n` +
-        `• USDT (${usdtFree}) không đủ > ${BUY_AMOUNT_USD}`
-      );
+    if (usdtFree > BUY_AMOUNT_USD) {
+      let rawBuy = Math.max(price - BUY_UNDER_USD, filters.minPrice);
+      const buyPrice = roundToTick(rawBuy, filters.tickSize);
+      let buyQty = floorToStep(BUY_AMOUNT_USD / buyPrice, filters.stepSize);
+
+      if (buyQty < filters.minQty) buyQty = filters.minQty;
+      if (!ensureNotional(buyPrice, buyQty, filters.minNotional))
+        throw new Error('Không thể đạt minNotional khi BUY');
+
+      const buyOrder = await placeLimit('BUY', buyPrice, buyQty);
+      await sendTelegramMessage(
+        `🟩 ĐẶT BUY ${SYMBOL}
+      ` +
+      `• ID: ${buyOrder.orderId}
+    ` +
+    `• Giá: ${buyOrder.price}
+  ` +
+`• SL: ${buyOrder.origQty}`
+);
+
+      const filled = await waitFilled(buyOrder.orderId);
+      const executedQty = toNumber(filled.executedQty || 0);
+      const cumQuote    = toNumber(filled.cummulativeQuoteQty || 0);
+      const avgBuyPrice = executedQty > 0 ? (cumQuote / executedQty) : null;
+
+      await sendTelegramMessage(
+        `✅ BUY FILLED ${SYMBOL}
+      ` +
+      `• ID: ${filled.orderId}
+    ` +
+    `• SL khớp : ${executedQty}
+  ` +
+`• Giá TB   : ${avgBuyPrice ?? 'null'}`
+);
+
+      const baseSell = avgBuyPrice ?? price;
+      let rawSell = Math.min(Math.max(baseSell + SELL_OVER_USD, filters.minPrice), filters.maxPrice);
+      const sellPrice = formatByTick(ceilToTick(rawSell, filters.tickSize), filters.tickSize);
+      const sellQty   = floorToStep(executedQty, filters.stepSize);
+
+      if (sellQty < filters.minQty || !ensureNotional(sellPrice, sellQty, filters.minNotional)) {
+        return sendTelegramMessage(`⚠️ Bỏ qua đặt SELL: mất điều kiện qty/minNotional`);
+      }
+
+      const sellOrder = await placeLimit('SELL', sellPrice, sellQty);
+      await sendTelegramMessage(
+        `🟥 ĐẶT SELL ${SYMBOL}
+      ` +
+      `• ID: ${sellOrder.orderId}
+    ` +
+    `• Giá: ${sellOrder.price}
+  ` +
+`• SL : ${sellOrder.origQty}`
+);
+
+    } else {
+      await sendTelegramMessage(
+        `ℹ️ ${SYMBOL}
+      ` +
+      `• Không có SELL chờ
+    ` +
+  `• USDT (${usdtFree}) không đủ > ${BUY_AMOUNT_USD}`
+  );
+
+      if (baseFree >= filters.minQty) {
+        const baseSell = price;
+        let rawSell = Math.min(Math.max(baseSell + SELL_OVER_USD, filters.minPrice), filters.maxPrice);
+        const sellPrice = formatByTick(ceilToTick(rawSell, filters.tickSize), filters.tickSize);
+        const sellQty   = floorToStep(baseFree, filters.stepSize);
+
+        if (sellQty >= filters.minQty && ensureNotional(sellPrice, sellQty, filters.minNotional)) {
+          const sellOrder = await placeLimit('SELL', sellPrice, sellQty);
+          await sendTelegramMessage(
+            `🟥 ĐẶT SELL ${SYMBOL} (từ PAXG có sẵn)
+          ` +
+          `• ID: ${sellOrder.orderId}
+        ` +
+        `• Giá: ${sellOrder.price}
+      ` +
+    `• SL : ${sellOrder.origQty}`
+    );
+        } else {
+          await sendTelegramMessage(`⚠️ Bỏ qua đặt SELL từ PAXG có sẵn: mất điều kiện qty/minNotional`);
+        }
+      }
     }
-
-    // Tính giá và SL BUY
-    let rawBuy = Math.max(price - BUY_UNDER_USD, filters.minPrice);
-    const buyPrice = roundToTick(rawBuy, filters.tickSize);
-    let buyQty = floorToStep(BUY_AMOUNT_USD / buyPrice, filters.stepSize);
-
-    if (buyQty < filters.minQty) buyQty = filters.minQty;
-    if (!ensureNotional(buyPrice, buyQty, filters.minNotional))
-      throw new Error('Không thể đạt minNotional khi BUY');
-
-    const buyOrder = await placeLimit('BUY', buyPrice, buyQty);
-    await sendTelegramMessage(
-      `🟩 ĐẶT BUY ${SYMBOL}\n` +
-      `• ID: ${buyOrder.orderId}\n` +
-      `• Giá: ${buyOrder.price}\n` +
-      `• SL: ${buyOrder.origQty}`
-    );
-
-    // Đợi BUY FILLED
-    const filled = await waitFilled(buyOrder.orderId);
-    const executedQty = toNumber(filled.executedQty || 0);
-    const cumQuote    = toNumber(filled.cummulativeQuoteQty || 0);
-    // Nếu không có executedQty, avgBuyPrice sẽ null
-    const avgBuyPrice = executedQty > 0
-      ? (cumQuote / executedQty)
-      : null;
-
-    await sendTelegramMessage(
-      `✅ BUY FILLED ${SYMBOL}\n` +
-      `• ID: ${filled.orderId}\n` +
-      `• SL khớp : ${executedQty}\n` +
-      `• Giá TB   : ${avgBuyPrice ?? 'null'}`
-    );
-
-    // 3. Đặt SELL: base = avgBuyPrice || price
-    const baseSell = avgBuyPrice ?? price;
-    let rawSell = Math.min(Math.max(baseSell + SELL_OVER_USD, filters.minPrice), filters.maxPrice);
-    const sellPrice = formatByTick(ceilToTick(rawSell, filters.tickSize), filters.tickSize);
-    const sellQty   = floorToStep(executedQty, filters.stepSize);
-
-    if (sellQty < filters.minQty || !ensureNotional(sellPrice, sellQty, filters.minNotional)) {
-      return sendTelegramMessage(`⚠️ Bỏ qua đặt SELL: mất điều kiện qty/minNotional`);
-    }
-
-    const sellOrder = await placeLimit('SELL', sellPrice, sellQty);
-    await sendTelegramMessage(
-      `🟥 ĐẶT SELL ${SYMBOL}\n` +
-      `• ID: ${sellOrder.orderId}\n` +
-      `• Giá: ${sellOrder.price}\n` +
-      `• SL : ${sellOrder.origQty}`
-    );
 
   } catch (err) {
     const msg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
