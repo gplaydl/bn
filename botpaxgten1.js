@@ -15,7 +15,7 @@ const BASE            = 'PAXG';
 const BUY_AMOUNT_USD  = 80;
 const INTERVAL        = 30_000;
 const ENABLE_REINVEST = true;
-const KEEPALIVE_URL   = process.env.KEEPALIVE_URL || '';
+const KEEPALIVE_URL   = process.env.KEEPALIVE_URL || 'https://bn-5l7b.onrender.com/health';
 const BUY_UNDER_USD   = 5;   // đặt mua ở giá market - BUY_UNDER_USD
 const SELL_OVER_USD   = 10;  // đặt bán ở giá mua + SELL_OVER_USD
 
