@@ -14,7 +14,7 @@ const QUOTE           = 'USDT';
 const BASE            = 'PAXG';
 const BUY_AMOUNT_USD  = 80;
 const INTERVAL        = 30_000;
-const KEEPALIVE_URL   = process.env.KEEPALIVE_URL || '';
+const KEEPALIVE_URL   = process.env.KEEPALIVE_URL || 'https://bn-5l7b.onrender.com/health';
 const BUY_UNDER_USD   = 5;   // đặt mua ở giá thị trường - 5
 const SELL_OVER_USD   = 10;  // đặt bán ở giá mua + 10
 
@@ -247,3 +247,4 @@ if (KEEPALIVE_URL) {
   setInterval(() => {
     axios.get(KEEPALIVE_URL).catch(()=>{/* ignore */});
   }, 14 * 60 * 1000);
+}
