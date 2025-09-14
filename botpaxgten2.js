@@ -160,6 +160,18 @@ async function mainCycle() {
 
     // 2. Không có SELL, nếu USDT > BUY_AMOUNT_USD → đặt BUY
     if (usdtFree <= BUY_AMOUNT_USD) {
+      // Kiểm tra lệnh BUY đang chờ
+      const buyPending = openOrders.find(o => o.side === 'BUY' && o.status === 'NEW');
+      if (buyPending) {
+        return sendTelegramMessage(
+          `📊 ${SYMBOL}\n` +
+          `• Giá thị trường : ${price}\n` +
+          `• USDT khả dụng : ${usdtFree}\n` +
+          `• BUY chờ : ID=${buyPending.orderId} | Giá=${buyPending.price} | SL=${buyPending.origQty}`
+        );
+      }
+    
+      // Không có BUY chờ
       return sendTelegramMessage(
         `ℹ️ ${SYMBOL}\n` +
         `• Không có SELL chờ\n` +
