@@ -177,30 +177,37 @@ let state = {
 async function ensureGrid(price) {
   if (grid.levels.length) return;
 
+  const gap = Number(process.env.GRID_GAP_USD || 1); // khoảng cách giữa các nốt
+  const step = Number(process.env.GRID_STEP_USD || 10); // độ rộng mỗi nốt
+
   if (GRID_MIN != null && GRID_MAX != null && GRID_NODES != null && GRID_MAX > GRID_MIN && GRID_NODES > 0) {
     grid.min   = GRID_MIN;
     grid.max   = GRID_MAX;
     grid.nodes = GRID_NODES;
   } else {
-    // grid động: tạo 40 bậc (~20 dưới, 20 trên) với step = GRID_STEP_USD
-    const stepsEachSide = 20;
-    const low  = Math.max(filters.minPrice, price - stepsEachSide * GRID_STEP_USD);
-    const high = Math.min(filters.maxPrice, price + stepsEachSide * GRID_STEP_USD);
+    // grid động: tạo 20 nốt quanh giá hiện tại
+    const totalNodes = 20;
+    const half = Math.floor(totalNodes / 2);
+    const low  = Math.max(filters.minPrice, price - (step + gap) * half);
+    const high = Math.min(filters.maxPrice, price + (step + gap) * half);
     grid.min   = roundToTick(low,  filters.tickSize);
     grid.max   = roundToTick(high, filters.tickSize);
-    grid.nodes = Math.max(1, Math.floor((grid.max - grid.min) / GRID_STEP_USD));
+    grid.nodes = totalNodes;
   }
 
-  // Tạo levels
-  const width = (grid.max - grid.min) / grid.nodes;
-  grid.levels = Array.from({length: grid.nodes + 1}, (_, i) => formatByTick(grid.min + i * width, filters.tickSize)).map(Number);
+  // Tạo levels: mỗi nốt cách nhau (step + gap)
+  grid.levels = [];
+  for (let i = 0; i <= grid.nodes; i++) {
+    const start = grid.min + i * (step + gap);
+    grid.levels.push(roundToTick(start, filters.tickSize));
+  }
 
   await sendTelegramMessage(
     `🧱 Khởi tạo Grid\n` +
     `• Min: ${grid.min}\n` +
     `• Max: ${grid.max}\n` +
     `• Nốt: ${grid.nodes}\n` +
-    `• Bước ~: ${((grid.max-grid.min)/grid.nodes).toFixed(4)}`
+    `• Bước: ${step} | Khoảng cách: ${gap}`
   );
 }
 
