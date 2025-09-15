@@ -185,8 +185,8 @@ async function ensureGrid(price) {
     grid.max   = GRID_MAX;
     grid.nodes = GRID_NODES;
   } else {
-    // grid động: tạo 20 nốt quanh giá hiện tại
-    const totalNodes = 20;
+    // grid động: tạo 2 nốt quanh giá hiện tại
+    const totalNodes = 2;
     const half = Math.floor(totalNodes / 2);
     const low  = Math.max(filters.minPrice, price - (step + gap) * half);
     const high = Math.min(filters.maxPrice, price + (step + gap) * half);
