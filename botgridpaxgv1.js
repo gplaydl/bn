@@ -18,8 +18,8 @@ const INTERVAL        = Number(process.env.INTERVAL_MS || 30_000);
 const KEEPALIVE_URL   = process.env.KEEPALIVE_URL || 'https://bn-5l7b.onrender.com/health';
 
 // Grid config: ưu tiên GRID_MIN/MAX/NODES; nếu thiếu thì dùng GRID_STEP_USD = 10
-const GRID_MIN        = process.env.GRID_MIN ? Number(process.env.GRID_MIN) : 3635;
-const GRID_MAX        = process.env.GRID_MAX ? Number(process.env.GRID_MAX) : 3655;
+const GRID_MIN        = process.env.GRID_MIN ? Number(process.env.GRID_MIN) : null;
+const GRID_MAX        = process.env.GRID_MAX ? Number(process.env.GRID_MAX) : null;
 const GRID_NODES      = process.env.GRID_NODES ? Number(process.env.GRID_NODES) : 2;
 const GRID_STEP_USD   = Number(process.env.GRID_STEP_USD || 10);
 
