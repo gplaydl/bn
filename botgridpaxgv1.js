@@ -222,9 +222,9 @@ async function mainCycle() {
 
     // Gom API: giá, số dư, openOrders
     const [price, balances, openOrders] = await Promise.all([
-      retry(() => getCurrentPrice(), {retries: 3, delay: 400}),
-      retry(() => getBalances(),     {retries: 3, delay: 400}),
-      retry(() => getOpenOrders(),   {retries: 3, delay: 400}),
+      retry(() => getCurrentPrice(), { retries: 3, delay: 400 }),
+      retry(() => getBalances(),     { retries: 3, delay: 400 }),
+      retry(() => getOpenOrders(),   { retries: 3, delay: 400 }),
     ]);
 
     await ensureGrid(price);
@@ -280,7 +280,7 @@ async function mainCycle() {
       const buyExists  = openOrders.some(o => o.side === 'BUY'  && Number(o.price) === Number(buyPrice));
       const sellExists = openOrders.some(o => o.side === 'SELL' && Number(o.price) === Number(sellPrice));
 
-     // ===== BUY =====
+      // ===== BUY =====
       if (buyExists) {
         const pendingBuy = openOrders.find(o => o.side === 'BUY' && Number(o.price) === Number(buyPrice));
         messages.push(
@@ -293,7 +293,7 @@ async function mainCycle() {
       } else if (balances.usdtFree > BUY_AMOUNT_USD) {
         let buyQty = floorToStep(BUY_AMOUNT_USD / buyPrice, filters.stepSize);
         if (buyQty < filters.minQty) buyQty = filters.minQty;
-      
+
         if (ensureNotional(buyPrice, buyQty, filters.minNotional)) {
           const buyOrder = await placeLimit('BUY', buyPrice, buyQty);
           messages.push(
@@ -305,26 +305,27 @@ async function mainCycle() {
         }
       }
 
-     // ===== SELL =====
-    if (sellExists) {
-      const pendingSell = openOrders.find(o => o.side === 'SELL' && Number(o.price) === Number(sellPrice));
-      messages.push(
-        `⏳ SELL đang chờ tại nốt [${nodeMin}, ${nodeMax}]\n` +
-        `• ID  : ${pendingSell.orderId}\n` +
-        `• Giá chờ: ${pendingSell.price}\n` +
-        `• Giá thị trường: ${price}\n` +
-        `• SL  : ${pendingSell.origQty}`
-      );
-    } else {
-      const estQty = floorToStep(BUY_AMOUNT_USD / sellPrice, filters.stepSize);
-      if (balances.baseFree >= estQty && ensureNotional(sellPrice, estQty, filters.minNotional)) {
-        const sellOrder = await placeLimit('SELL', sellPrice, estQty);
+      // ===== SELL =====
+      if (sellExists) {
+        const pendingSell = openOrders.find(o => o.side === 'SELL' && Number(o.price) === Number(sellPrice));
         messages.push(
-          `🟥 ĐẶT SELL ${SYMBOL} tại nốt [${nodeMin}, ${nodeMax}]\n` +
-          `• Giá: ${sellOrder.price}\n` +
-          `• SL : ${sellOrder.origQty}\n` +
-          `• ID : ${sellOrder.orderId}`
+          `⏳ SELL đang chờ tại nốt [${nodeMin}, ${nodeMax}]\n` +
+          `• ID  : ${pendingSell.orderId}\n` +
+          `• Giá chờ: ${pendingSell.price}\n` +
+          `• Giá thị trường: ${price}\n` +
+          `• SL  : ${pendingSell.origQty}`
         );
+      } else {
+        const estQty = floorToStep(BUY_AMOUNT_USD / sellPrice, filters.stepSize);
+        if (balances.baseFree >= estQty && ensureNotional(sellPrice, estQty, filters.minNotional)) {
+          const sellOrder = await placeLimit('SELL', sellPrice, estQty);
+          messages.push(
+            `🟥 ĐẶT SELL ${SYMBOL} tại nốt [${nodeMin}, ${nodeMax}]\n` +
+            `• Giá: ${sellOrder.price}\n` +
+            `• SL : ${sellOrder.origQty}\n` +
+            `• ID : ${sellOrder.orderId}`
+          );
+        }
       }
     }
 
