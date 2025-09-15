@@ -225,9 +225,10 @@ function findNodeIndex(price) {
 // ====== Main cycle ======
 async function mainCycle() {
   try {
-    if (!filters.tickSize) await loadSymbolFilters();
+    if (!filters.tickSize) 
+      await loadSymbolFilters();
 
-    // Gom API: giá, số dư, openOrders
+    // 1. Gom API call
     const [price, balances, openOrders] = await Promise.all([
       retry(() => getCurrentPrice(), { retries: 3, delay: 400 }),
       retry(() => getBalances(),     { retries: 3, delay: 400 }),
@@ -235,119 +236,124 @@ async function mainCycle() {
     ]);
 
     await ensureGrid(price);
-
     const messages = [];
 
-    // === Kiểm tra các lệnh SELL đã khớp và tự động đặt lại BUY ===
-    for (const order of openOrders.filter(o => o.side === 'SELL')) {
-      const o = await retry(() => getOrder(order.orderId), { retries: 3, delay: 400 });
+    // 2. Kiểm tra SELL đã khớp → gửi Telegram → tự động tái tạo BUY
+    for (const ord of openOrders.filter(o => o.side === 'SELL')) {
+      const o = await retry(() => getOrder(ord.orderId), { retries: 3, delay: 400 });
       if (o.status === 'FILLED') {
         const executedQty = toNumber(o.executedQty || 0);
         const cumQuote    = toNumber(o.cummulativeQuoteQty || 0);
-        const avgSellPrice = executedQty > 0 ? (cumQuote / executedQty) : null;
+        const avgPrice    = executedQty > 0 ? (cumQuote / executedQty) : null;
 
         messages.push(
           `🎉 SELL FILLED ${SYMBOL}\n` +
-          `• ID: ${o.orderId}\n` +
-          `• SL khớp: ${executedQty}\n` +
-          `• Giá TB: ${avgSellPrice ?? 'null'}`
+          `• ID      : ${o.orderId}\n` +
+          `• Khối lượng khớp: ${executedQty}\n` +
+          `• Giá trung bình : ${avgPrice ?? '–'}`
         );
 
-        // Tìm lại nốt tương ứng với giá SELL
-        const idx = findNodeIndex(avgSellPrice ?? toNumber(o.price));
+        // Tự động đặt lại BUY theo nốt tương ứng
+        const idx = findNodeIndex(avgPrice ?? toNumber(o.price));
         if (idx !== null) {
           const nodeMin = grid.levels[idx];
           const buyPrice = roundToTick(nodeMin, filters.tickSize);
           let buyQty = floorToStep(BUY_AMOUNT_USD / buyPrice, filters.stepSize);
           if (buyQty < filters.minQty) buyQty = filters.minQty;
 
-          const buyExists = openOrders.some(o => o.side === 'BUY' && Number(o.price) === Number(buyPrice));
-          if (!buyExists && balances.usdtFree > BUY_AMOUNT_USD && ensureNotional(buyPrice, buyQty, filters.minNotional)) {
+          const alreadyBuy = openOrders.some(x => x.side === 'BUY' && Number(x.price) === buyPrice);
+          if (!alreadyBuy 
+              && balances.usdtFree > BUY_AMOUNT_USD 
+              && ensureNotional(buyPrice, buyQty, filters.minNotional)) {
             const buyOrder = await placeLimit('BUY', buyPrice, buyQty);
             messages.push(
-              `🔁 ĐẶT LẠI BUY sau SELL\n` +
+              `🔁 TÁI ĐẶT BUY sau SELL\n` +
               `• Nốt: [${nodeMin}, ${grid.levels[idx + 1]}]\n` +
-              `• Giá: ${buyOrder.price}\n` +
-              `• SL : ${buyOrder.origQty}\n` +
-              `• ID : ${buyOrder.orderId}`
+              `• Giá đặt : ${buyOrder.price}\n` +
+              `• SL       : ${buyOrder.origQty}\n` +
+              `• Order ID : ${buyOrder.orderId}`
             );
           }
         }
       }
     }
 
-    // === Duyệt toàn bộ các nốt để đặt BUY/SELL nếu chưa có ===
+    // 3. Duyệt toàn bộ nốt: BUY/SELL hoặc hiển thị chờ
     for (let i = 0; i < grid.levels.length - 1; i++) {
       const nodeMin = grid.levels[i];
       const nodeMax = grid.levels[i + 1];
-
       const buyPrice  = roundToTick(nodeMin, filters.tickSize);
       const sellPrice = formatByTick(ceilToTick(nodeMax, filters.tickSize), filters.tickSize);
 
-      const buyExists  = openOrders.some(o => o.side === 'BUY'  && Number(o.price) === Number(buyPrice));
-      const sellExists = openOrders.some(o => o.side === 'SELL' && Number(o.price) === Number(sellPrice));
+      const buyExists  = openOrders.some(o => o.side === 'BUY'  && Number(o.price) === buyPrice);
+      const sellExists = openOrders.some(o => o.side === 'SELL' && Number(o.price) === sellPrice);
 
-      // ===== BUY =====
+      // ——— BUY ———
       if (buyExists) {
-        const pendingBuy = openOrders.find(o => o.side === 'BUY' && Number(o.price) === Number(buyPrice));
+        const pending = openOrders.find(o => o.side === 'BUY' && Number(o.price) === buyPrice);
         messages.push(
-          `⏳ BUY đang chờ tại nốt [${nodeMin}, ${nodeMax}]\n` +
-          `• ID  : ${pendingBuy.orderId}\n` +
-          `• Giá chờ: ${pendingBuy.price}\n` +
-          `• Giá thị trường: ${price}\n` +
-          `• SL  : ${pendingBuy.origQty}`
+          `⏳ BUY chờ tại nốt [${nodeMin}, ${nodeMax}]\n` +
+          `• ID Order   : ${pending.orderId}\n` +
+          `• Giá chờ    : ${pending.price}\n` +
+          `• Giá hiện tại: ${price}\n` +
+          `• SL         : ${pending.origQty}`
         );
-      } else if (balances.usdtFree > BUY_AMOUNT_USD) {
-        let buyQty = floorToStep(BUY_AMOUNT_USD / buyPrice, filters.stepSize);
-        if (buyQty < filters.minQty) buyQty = filters.minQty;
 
-        if (ensureNotional(buyPrice, buyQty, filters.minNotional)) {
-          const buyOrder = await placeLimit('BUY', buyPrice, buyQty);
+      } else if (balances.usdtFree > BUY_AMOUNT_USD) {
+        let qty = floorToStep(BUY_AMOUNT_USD / buyPrice, filters.stepSize);
+        if (qty < filters.minQty) qty = filters.minQty;
+        if (ensureNotional(buyPrice, qty, filters.minNotional)) {
+          const o = await placeLimit('BUY', buyPrice, qty);
           messages.push(
-            `🟩 ĐẶT BUY ${SYMBOL} tại nốt [${nodeMin}, ${nodeMax}]\n` +
-            `• Giá: ${buyOrder.price}\n` +
-            `• SL : ${buyOrder.origQty}\n` +
-            `• ID : ${buyOrder.orderId}`
+            `🟩 ĐẶT BUY tại nốt [${nodeMin}, ${nodeMax}]\n` +
+            `• Giá   : ${o.price}\n` +
+            `• SL    : ${o.origQty}\n` +
+            `• Order ID: ${o.orderId}`
           );
         }
       }
 
-      // ===== SELL =====
+      // ——— SELL ———
       if (sellExists) {
-        const pendingSell = openOrders.find(o => o.side === 'SELL' && Number(o.price) === Number(sellPrice));
+        const pending = openOrders.find(o => o.side === 'SELL' && Number(o.price) === sellPrice);
         messages.push(
-          `⏳ SELL đang chờ tại nốt [${nodeMin}, ${nodeMax}]\n` +
-          `• ID  : ${pendingSell.orderId}\n` +
-          `• Giá chờ: ${pendingSell.price}\n` +
-          `• Giá thị trường: ${price}\n` +
-          `• SL  : ${pendingSell.origQty}`
+          `⏳ SELL chờ tại nốt [${nodeMin}, ${nodeMax}]\n` +
+          `• ID Order   : ${pending.orderId}\n` +
+          `• Giá chờ    : ${pending.price}\n` +
+          `• Giá hiện tại: ${price}\n` +
+          `• SL         : ${pending.origQty}`
         );
+
       } else {
         const estQty = floorToStep(BUY_AMOUNT_USD / sellPrice, filters.stepSize);
         if (balances.baseFree >= estQty && ensureNotional(sellPrice, estQty, filters.minNotional)) {
-          const sellOrder = await placeLimit('SELL', sellPrice, estQty);
+          const o = await placeLimit('SELL', sellPrice, estQty);
           messages.push(
-            `🟥 ĐẶT SELL ${SYMBOL} tại nốt [${nodeMin}, ${nodeMax}]\n` +
-            `• Giá: ${sellOrder.price}\n` +
-            `• SL : ${sellOrder.origQty}\n` +
-            `• ID : ${sellOrder.orderId}`
+            `🟥 ĐẶT SELL tại nốt [${nodeMin}, ${nodeMax}]\n` +
+            `• Giá   : ${o.price}\n` +
+            `• SL    : ${o.origQty}\n` +
+            `• Order ID: ${o.orderId}`
           );
         }
       }
     }
 
-    // Nếu không có hành động nào
+    // 4. Nếu không có tin nhắn nào, vẫn báo về Telegram
     if (messages.length === 0) {
-      messages.push(`ℹ️ ${SYMBOL}\n• Không có hành động mới trong chu kỳ này\n• Giá hiện tại: ${price}`);
+      messages.push(
+        `ℹ️ ${SYMBOL}\n` +
+        `• Không có hành động mới\n` +
+        `• Giá hiện tại: ${price}`
+      );
     }
 
-    // Gửi tổng hợp
+    // 5. Gửi gộp một lần
     await sendTelegramMessage(messages.join('\n\n'));
 
   } catch (err) {
-    const msg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-    console.error('❌ mainCycle lỗi:', msg);
-    await sendTelegramMessage(`❌ Lỗi: ${msg}`);
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error('❌ mainCycle lỗi:', detail);
+    await sendTelegramMessage(`❌ mainCycle lỗi: ${detail}`);
   }
 }
 
