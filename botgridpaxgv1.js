@@ -286,7 +286,8 @@ async function mainCycle() {
       const sellPrice = formatByTick(ceilToTick(nodeMax, filters.tickSize), filters.tickSize);
 
       const buyExists  = openOrders.some(o => o.side === 'BUY'  && Number(o.price) === buyPrice);
-      const sellExists = openOrders.some(o => o.side === 'SELL' && Number(o.price) === sellPrice);
+      // const sellExists = openOrders.some(o => o.side === 'SELL' && Number(o.price) === sellPrice);
+      const sellExists = openOrders.some(o => o.side === 'SELL');
 
       // ——— BUY ———
       if (buyExists) {
@@ -315,7 +316,8 @@ async function mainCycle() {
 
       // ——— SELL ———
       if (sellExists) {
-        const pending = openOrders.find(o => o.side === 'SELL' && Number(o.price) === sellPrice);
+        // const pending = openOrders.find(o => o.side === 'SELL' && Number(o.price) === sellPrice);
+        const pending = openOrders.find(o => o.side === 'SELL');
         messages.push(
           `⏳ SELL chờ tại nốt [${nodeMin}, ${nodeMax}]\n` +
           `• ID Order   : ${pending.orderId}\n` +
